@@ -12,7 +12,10 @@
 
   "permissions": ["tabs", "downloads", "storage"],
 
-  "host_permissions": ["https://chatgpt.com/*"],
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "https://chat.openai.com/*"
+  ],
 
   "action": {
     "default_popup": "popup.html",
@@ -21,7 +24,10 @@
 
   "content_scripts": [
     {
-      "matches": ["https://chatgpt.com/*"],
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*"
+      ],
       "js": ["content.js"],
       "run_at": "document_idle"
     }

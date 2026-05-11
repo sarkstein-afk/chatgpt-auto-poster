@@ -204,7 +204,7 @@ btnDelProject.addEventListener("click", () => {
 // ====== ChatGPT 连接检查 ======
 async function checkChatGPT() {
   try {
-    const tabs = await chrome.tabs.query({ url: "https://chatgpt.com/*" });
+    const tabs = await chrome.tabs.query({ url: ["https://chatgpt.com/*", "https://chat.openai.com/*"] });
     if (tabs.length > 0) {
       const resp = await chrome.tabs.sendMessage(tabs[0].id, { type: "ping" });
       if (resp?.ok) {
@@ -213,12 +213,12 @@ async function checkChatGPT() {
         return tabs[0].id;
       }
     }
-    gptStatusEl.textContent = "⚠ 请先打开 chatgpt.com 并登录";
+    gptStatusEl.textContent = "⚠ 请刷新 ChatGPT 页面后重试（F5）";
     gptStatusEl.className = "status status-warn";
     return null;
   } catch {
-    gptStatusEl.textContent = "❌ 未连接";
-    gptStatusEl.className = "status status-err";
+    gptStatusEl.textContent = "⚠ 请刷新 ChatGPT 页面后重试（F5）";
+    gptStatusEl.className = "status status-warn";
     return null;
   }
 }

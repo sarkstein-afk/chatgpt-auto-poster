@@ -284,7 +284,7 @@ async function ensureTab(existingTabId, label) {
   if (existingTabId) {
     try { await chrome.tabs.get(existingTabId); return existingTabId; } catch {}
   }
-  const [tab] = await chrome.tabs.query({ url: "https://chatgpt.com/*" });
+  const [tab] = await chrome.tabs.query({ url: ["https://chatgpt.com/*", "https://chat.openai.com/*"] });
   if (tab) {
     try { await chrome.tabs.get(tab.id); return tab.id; } catch {}
   }
