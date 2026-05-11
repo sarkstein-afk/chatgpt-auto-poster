@@ -200,12 +200,12 @@ async function loadFileFromCache(f) {
   const fileObj = await f.handle.getFile();
   const dt = new DataTransfer();
   dt.items.add(fileObj);
-  pdfFileInput.files = dt.files;
-  refStatusEl.textContent = `📂 ${f.name}`;
-  // 记住模板标记
+  // 先设标记再赋值，避免 change 事件触发两次 parseFile
   f._isTemplate = isTemplate.checked;
   updateFileRoleHint();
-  await parseFile();
+  pdfFileInput.files = dt.files; // 这会触发 change → parseFile()
+  refStatusEl.textContent = "📂 " + f.name;
+  // 不再手动调 parseFile()，change 事件已触发
 }
 
 // 下拉框选文件 → 自动解析
