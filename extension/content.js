@@ -430,11 +430,11 @@ async function doGenerate(prompt, outputName, job, refImages) {
 
     console.log("  Sent");
     var ok = await waitForImage();
-    if (!ok) console.log("  Timeout, trying fallback");
+    if (!ok) console.log("  Generation may have timed out");
 
-    // 等 GPT 彻底停下（不再流式输出、不再有 stop 按钮）
+    // 等 GPT 彻底停下 + 额外强制等待 15 秒确保不打断
     await waitForResponseComplete();
-    await sleep(jitter(2000, 0.5));
+    await sleep(15000);
 
     // Find image URL
     var patterns = ["oaidalleapi", "files.oaiusercontent.com", "dall-e"];
