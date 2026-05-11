@@ -35,18 +35,14 @@ async function persistQueue() {
   await chrome.storage.local.set(payload).catch(() => {});
 }
 
-// ====== SW restore ======
+// ====== SW restore (don't auto-resume, just clear stale state) ======
 async function restoreQueue() {
-  const data = await chrome.storage.local.get(STORAGE_KEY);
-  const saved = data[STORAGE_KEY];
-  if (saved && saved.queue && saved.queue.length > 0 && saved.running) {
-    taskQueue = saved.queue;
-    completedCount = saved.completed || 0;
-    errorCount = saved.errors || 0;
-    taskResults = saved.taskResults || {};
-    isRunning = false;
-    console.log("Restored: " + taskQueue.length + " tasks, resuming");
-    startProcessing();
+  var data = await chrome.storage.local.get(STORAGE_KEY);
+  var saved = data[STORAGE_KEY];
+  if (saved && saved.running) {
+    // Was interrupted — clear stale state so it doesn't auto-start
+    console.log("Clearing stale queue from previous session");
+    await chrome.storage.local.remove(STORAGE_KEY);
   }
 }
 restoreQueue();
