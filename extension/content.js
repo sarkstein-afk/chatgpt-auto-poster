@@ -315,13 +315,20 @@ function extractReviewResult(text) {
   const score = scoreMatch ? parseInt(scoreMatch[1]) : null;
 
   if (score !== null) {
-    return { score: score > 10 ? score : score * 10, feedback: text.slice(0, 200), suggestions: text.slice(0, 500) };
+    const fixMatch = text.match(/(?:fixInstructions|suggestions|修改建议|修复)[:\s]*"([^"]+)"/i);
+    const issuesMatch = text.match(/(?:issues|问题)[:\s]*\[([^\]]+)\]/i);
+    return {
+      score: score > 10 ? score : score * 10,
+      feedback: text.slice(0, 200),
+      suggestions: fixMatch ? fixMatch[1] : (issuesMatch ? issuesMatch[1] : text.slice(0, 500)),
+    };
   }
   if (lower.includes("通过") || lower.includes("pass")) {
     return { score: 85, feedback: text.slice(0, 200), suggestions: "" };
   }
   if (lower.includes("不通过") || lower.includes("fail")) {
-    return { score: 40, feedback: text.slice(0, 200), suggestions: text.slice(0, 500) };
+    const fixMatch = text.match(/(?:fixInstructions|suggestions|修改建议)[:\s]*"([^"]+)/i);
+    return { score: 40, feedback: text.slice(0, 200), suggestions: fixMatch ? fixMatch[1] : text.slice(0, 500) };
   }
 
   return null;

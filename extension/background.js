@@ -13,6 +13,7 @@ let errorCount = 0;
 let taskResults = {};
 let generatorTabId = null;
 let reviewerTabId = null;
+let reviewStandardsSent = false; // 审核标准是否已发过
 
 // ====== 持久化 ======
 async function persistQueue() {
@@ -81,6 +82,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       completedCount = 0;
       errorCount = 0;
       taskResults = {};
+      reviewStandardsSent = false;
       persistQueue();
       sendResponse({ ok: true, total: taskQueue.length });
       if (!isRunning) startProcessing();
@@ -106,6 +108,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       taskResults = {};
       generatorTabId = null;
       reviewerTabId = null;
+      reviewStandardsSent = false;
       persistQueue();
       sendResponse({ ok: true });
       break;
@@ -209,7 +212,7 @@ async function startProcessing() {
         break;
       }
 
-      const feedback = reviewResult.suggestions || reviewResult.feedback || "Improve quality";
+      const feedback = reviewResult.fixInstructions || reviewResult.suggestions || reviewResult.feedback || "Improve quality";
       console.log(`[${task.id}] FAIL (${score} < ${threshold}): ${feedback.slice(0, 60)}`);
 
       if (attempt < maxRetries) {
@@ -247,28 +250,42 @@ function buildReviewPrompt(task, generationPrompt) {
       .replace(/\{prompt\}/g, generationPrompt);
   }
 
-  return `You are a strict professional image reviewer. Rate this generated image.
+  const threshold = task._passScore || DEFAULT_PASS_SCORE;
+
+  // 第一次发完整标准，后续发精简版（省 token）
+  if (!reviewStandardsSent) {
+    reviewStandardsSent = true;
+    return `You are a strict professional image reviewer. Examine this generated image against the requirements below.
 
 [Original Requirements]
 ${task._originalRequirements || generationPrompt}
 
-[Scoring Criteria - 100 points total]
-1. Content accuracy (40pts): Does the image accurately match the requirements?
-2. Style consistency (25pts): Does it match the requested style?
-3. Quality (20pts): Sharpness, composition, overall polish?
-4. Defects (15pts): Any visible AI artifacts (deformed limbs, garbled text, unnatural seams)?
+[Scoring - 100 points]
+1. Content accuracy (40pts): Every element matches description? Extra/missing objects?
+2. Style consistency (25pts): Color, lighting, composition match?
+3. Technical quality (20pts): Sharp, clean, well-composed?
+4. AI defects (15pts): Deformed limbs? Garbled text? Unnatural seams? Bad anatomy?
 
-Reply in JSON only:
-{"score": <0-100 integer>, "feedback": "<one line>", "suggestions": "<specific changes for the AI to fix, if score < ${task._passScore || DEFAULT_PASS_SCORE}>"}`;
+Reply JSON only:
+{"score":<0-100>,"passed":<score>=${threshold}>,"issues":["problem1","problem2"],"verdict":"summary","fixInstructions":"EXACTLY what to change and how - be specific about which element, what's wrong, how to fix"}`
+  }
+
+  // 精简版
+  return `Review this image. Same criteria as before. Original requirements: ${(task._originalRequirements || generationPrompt).slice(0, 200)}
+
+JSON only: {"score":<0-100>,"passed":<score>=${threshold}>,"issues":["..."],"verdict":"...","fixInstructions":"specific fixes if score<${threshold}"}`;
 }
 
 // ====== Prompt revision ======
 function revisePrompt(originalPrompt, feedback) {
   return `${originalPrompt}
 
-[CRITICAL REVISION]
-The previous image was rejected. Fix these issues:
+[CRITICAL FIXES REQUIRED]
+The previous image failed review. You MUST fix these specific problems:
+
 ${feedback}
+
+IMPORTANT: Do NOT just re-generate the same thing. Address EACH issue listed above explicitly.`;
 
 You MUST address all of the above problems.`;
 }
