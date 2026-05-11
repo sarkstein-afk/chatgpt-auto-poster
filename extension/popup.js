@@ -30,8 +30,6 @@ const pdfStatusEl = document.getElementById("pdfStatus");
 const fileSelect = document.getElementById("fileSelect");
 const isTemplate = document.getElementById("isTemplate");
 const fileRoleHint = document.getElementById("fileRoleHint");
-const refImagesEl = document.getElementById("refImages");
-const refStatusEl = document.getElementById("refStatus");
 const btnAddUrl = document.getElementById("btnAddUrl");
 const btnScrapeAll = document.getElementById("btnScrapeAll");
 const scrapeUrlInput = document.getElementById("scrapeUrlInput");
@@ -45,7 +43,7 @@ let scrapedImages = [];
 
 // ====== State ======
 let imageRequests = [];
-let referenceImages = []; // 参考图 data URLs
+
 let pdfDoc = null; // 解析后的 PDF 对象（用于渲染页面缩略图）
 let pollTimer = null;
 let projects = {};
@@ -214,7 +212,7 @@ async function loadFileFromCache(f) {
   f._isTemplate = isTemplate.checked;
   updateFileRoleHint();
   pdfFileInput.files = dt.files; // 这会触发 change → parseFile()
-  refStatusEl.textContent = "📂 " + f.name;
+  // removed refStatusEl
   // 不再手动调 parseFile()，change 事件已触发
 }
 
@@ -411,27 +409,6 @@ btnScrapeAll.addEventListener("click", async function() {
   }
 
   scrapeStatus.textContent = "✅ 抓完 " + savedUrls.length + "个链接 (" + scrapedImages.length + "张图)";
-});
-
-// ====== 参考图读取 ======
-refImagesEl.addEventListener("change", async () => {
-  referenceImages = [];
-  const files = Array.from(refImagesEl.files);
-  if (files.length === 0) {
-    refStatusEl.textContent = "";
-    return;
-  }
-
-  refStatusEl.textContent = `⏳ 读取中...`;
-  for (const file of files) {
-    const dataUrl = await new Promise(r => {
-      const reader = new FileReader();
-      reader.onload = () => r(reader.result);
-      reader.readAsDataURL(file);
-    });
-    referenceImages.push(dataUrl);
-  }
-  refStatusEl.textContent = `✅ ${files.length} 张参考图已就绪（将和 Prompt 一起发送）`;
 });
 
 // ====== PDF 页面渲染为缩略图 ======
