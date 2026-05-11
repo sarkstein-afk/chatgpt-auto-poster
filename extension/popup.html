@@ -85,10 +85,13 @@
 
 <!-- 文件选择 -->
 <div class="section">
-  <label>📄 选择文件（PDF / PPT / PPTX）</label>
+  <label>📄 选择文件</label>
+  <select id="fileSelect" style="width:100%;margin-bottom:6px;">
+    <option value="">-- 先点「选择项目目录」或手动选文件 --</option>
+  </select>
   <div class="row">
     <input type="file" id="pdfFile" accept=".pdf,.pptx,.docx,.xlsx,.txt,.csv,.md" style="padding:4px;">
-    <button class="btn-sm" id="btnParse">手动解析</button>
+    <button class="btn-sm" id="btnParse">解析</button>
   </div>
   <div id="pdfStatus"></div>
 </div>

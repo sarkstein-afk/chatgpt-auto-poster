@@ -27,6 +27,7 @@ const progressBar = document.getElementById("progressBar");
 const progressText = document.getElementById("progressText");
 const gptStatusEl = document.getElementById("gptStatus");
 const pdfStatusEl = document.getElementById("pdfStatus");
+const fileSelect = document.getElementById("fileSelect");
 const refImagesEl = document.getElementById("refImages");
 const refStatusEl = document.getElementById("refStatus");
 
@@ -90,41 +91,63 @@ function updateProjectPathHint() {
 }
 
 // ====== 文件夹选择（对接本地文件系统） ======
+let rootDirHandle = null;
+
+async function scanAllProjectFiles(dirHandle) {
+  const files = [];
+  for await (const [name, handle] of dirHandle.entries()) {
+    if (handle.kind === "directory") {
+      // 扫描子目录里的文件
+      for await (const [fname, fhandle] of handle.entries()) {
+        if (fhandle.kind === "file") {
+          const ext = fname.split(".").pop().toLowerCase();
+          if (["pdf", "pptx", "docx", "xlsx", "txt", "ppt", "doc", "xls"].includes(ext)) {
+            files.push({ name: fname, handle: fhandle, project: name, ext });
+          }
+        }
+      }
+    } else if (handle.kind === "file") {
+      const ext = name.split(".").pop().toLowerCase();
+      if (["pdf", "pptx", "docx", "xlsx", "txt"].includes(ext)) {
+        files.push({ name, handle, project: "root", ext });
+      }
+    }
+  }
+  return files;
+}
+
 btnSelectRoot.addEventListener("click", async () => {
   try {
-    const dirHandle = await window.showDirectoryPicker({ mode: "read" });
-    const rootPath = dirHandle.name; // 只拿到文件夹名，拿不到完整路径
+    // 用 id 记住权限，第二次点不会弹选择框
+    rootDirHandle = await window.showDirectoryPicker({ id: "project-root", mode: "read" });
 
-    // 扫描子目录
+    // 扫描子目录 = 项目列表
     const discoveredProjects = { default: { ...DEFAULT_PROJECT } };
-    for await (const [name, handle] of dirHandle.entries()) {
+    for await (const [name, handle] of rootDirHandle.entries()) {
       if (handle.kind === "directory" && name !== "default") {
         discoveredProjects[name] = {
-          name: name,
-          globalInstruction: "",
-          enableReview: true,
-          passScore: 80,
-          maxRetries: 2,
-          reviewPromptTemplate: "",
+          name, globalInstruction: "", enableReview: true,
+          passScore: 80, maxRetries: 2, reviewPromptTemplate: "",
         };
       }
     }
-
-    // 合并到现有项目（不覆盖已有设置）
     for (const [id, cfg] of Object.entries(discoveredProjects)) {
       if (!projects[id]) projects[id] = cfg;
     }
 
-    // 保存
-    const displayPath = `projects 文件夹（${Object.keys(discoveredProjects).length - 1} 个子项目）`;
+    // 扫描所有文件
+    const foundFiles = await scanAllProjectFiles(rootDirHandle);
+    const displayPath = `已对接（${Object.keys(discoveredProjects).length - 1}个项目，${foundFiles.length}个文件）`;
     await chrome.storage.local.set({ projects, projectRootPath: displayPath });
 
     rootPathEl.textContent = displayPath;
     btnScanProjects.style.display = "";
-    projectPathHint.textContent = `📁 projects\\${activeProject}\\materials\\`;
+    updateProjectPathHint();
     renderProjectList();
 
-    pdfStatusEl.innerHTML = `<span class='status status-ok'>✅ 已对接，发现 ${Object.keys(discoveredProjects).length - 1} 个项目文件夹</span>`;
+    // 填充文件列表并自动解析当前项目下的文件
+    await refreshFileList(foundFiles);
+    pdfStatusEl.innerHTML = `<span class='status status-ok'>✅ ${displayPath}</span>`;
   } catch (e) {
     if (e.name !== "AbortError") {
       pdfStatusEl.innerHTML = `<span class='status status-err'>❌ ${e.message}</span>`;
@@ -132,9 +155,55 @@ btnSelectRoot.addEventListener("click", async () => {
   }
 });
 
-// 重新扫描
 btnScanProjects.addEventListener("click", async () => {
   btnSelectRoot.click();
+});
+
+// ====== 文件自动发现与解析 ======
+let foundFilesCache = [];
+
+async function refreshFileList(files) {
+  foundFilesCache = files || [];
+  if (!files) {
+    if (!rootDirHandle) return;
+    foundFilesCache = await scanAllProjectFiles(rootDirHandle);
+  }
+
+  // 筛选当前项目下的文件
+  const myFiles = foundFilesCache.filter(f => f.project === activeProject || f.project === "root");
+
+  // 填充下拉框
+  fileSelect.innerHTML = '<option value="">-- 选择文件（自动解析）--</option>';
+  for (const f of foundFilesCache) {
+    const label = f.project !== "root" ? `[${f.project}] ${f.name}` : f.name;
+    fileSelect.innerHTML += `<option value="${f.name}" data-project="${f.project}">${label}</option>`;
+  }
+
+  if (myFiles.length > 0) {
+    // 自动选第一个并解析
+    const first = myFiles[0];
+    fileSelect.value = first.name;
+    await loadFileFromCache(first);
+  }
+}
+
+async function loadFileFromCache(f) {
+  const fileObj = await f.handle.getFile();
+  const dt = new DataTransfer();
+  dt.items.add(fileObj);
+  pdfFileInput.files = dt.files;
+  refStatusEl.textContent = `📂 项目文件：${f.name}`;
+  await parseFile();
+}
+
+// 下拉框选文件 → 自动解析
+fileSelect.addEventListener("change", async () => {
+  const selName = fileSelect.value;
+  if (!selName) return;
+  const f = foundFilesCache.find(x => x.name === selName);
+  if (f && f.handle) {
+    await loadFileFromCache(f);
+  }
 });
 
 function saveActiveProject() {
