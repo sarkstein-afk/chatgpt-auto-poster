@@ -159,6 +159,8 @@ async function startProcessing() {
         prompt: currentPrompt,
         outputName: task.outputName,
         referenceImages: task.referenceImages,
+        contextPrompt: task.contextPrompt,
+        _isFirstTask: task._isFirstTask,
       }, 2);
 
       if (!genResult?.success) {

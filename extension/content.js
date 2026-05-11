@@ -7,7 +7,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === "generate") {
-    doGenerate(msg.prompt, msg.outputName, msg.referenceImages).then(sendResponse);
+    doGenerate(msg.prompt, msg.outputName, msg.referenceImages, msg.contextPrompt, msg._isFirstTask).then(sendResponse);
     return true;
   }
 
@@ -353,30 +353,31 @@ function normalizeScore(result) {
   return result;
 }
 
-// ==================== 核心：生成一张图（含参考图一次性上传） ====================
-async function doGenerate(prompt, outputName, referenceImages) {
-  console.log(`🎨 [生图] ${outputName}${referenceImages?.length ? ` +${referenceImages.length}张参考图` : ""}`);
+// ==================== 核心：生成一张图 ====================
+// referenceImages = [{ dataUrl, label }, ...]  带标签的参考图
+// contextPrompt = 发给GPT的上下文说明（仅第一个任务）
+// _isFirstTask = 是否第一个任务（需新建对话+上传素材）
+async function doGenerate(prompt, outputName, referenceImages, contextPrompt, _isFirstTask) {
+  const refs = referenceImages || [];
+  console.log(`🎨 [生图] ${outputName}${_isFirstTask ? ` [首任务+${refs.length}张素材]` : ""}`);
 
   try {
-    // 0. 新开对话
-    const newChatBtn =
-      document.querySelector('a[href="/"]') ||
-      document.querySelector('[data-testid="new-chat"]') ||
-      document.querySelector('button[aria-label*="New chat"], button[aria-label*="new chat"]');
-    if (newChatBtn) {
-      newChatBtn.click();
-      await sleep(2000);
+    // 第一个任务：新开对话
+    if (_isFirstTask) {
+      const newChatBtn =
+        document.querySelector('a[href="/"]') ||
+        document.querySelector('[data-testid="new-chat"]') ||
+        document.querySelector('button[aria-label*="New chat"], button[aria-label*="new chat"]');
+      if (newChatBtn) { newChatBtn.click(); await sleep(2000); }
     }
 
-    // 1. 等输入框出现
     const inputBox = await waitForInput();
     if (!inputBox) return { success: false, error: "找不到输入框" };
 
-    // 2. 上传参考图（全部一次性上传）
-    const refs = referenceImages || [];
+    // 上传参考图（有标签的素材图）
     if (refs.length > 0) {
-      for (let i = 0; i < refs.length; i++) {
-        const uploaded = await uploadImage(refs[i]);
+      for (const ref of refs) {
+        const uploaded = await uploadImage(ref.dataUrl || ref); // 兼容纯URL和新格式
         if (uploaded) {
           await waitForUploadComplete();
           await sleep(rand(300, 800));
@@ -385,12 +386,21 @@ async function doGenerate(prompt, outputName, referenceImages) {
       console.log(`  📎 ${refs.length} 张参考图已上传`);
     }
 
-    // 3. 输入文字（和参考图在同一个消息里）
+    // 构建消息文本（参考图标签 + 上下文 + 生图 prompt，一句话发送）
     await sleep(rand(200, 600));
-    await humanType(inputBox, prompt);
+    let fullText = "";
+
+    if (contextPrompt) {
+      // 第一个任务：先发上下文说明
+      fullText = contextPrompt + "\n\n现在请生成第一张图：\n" + prompt;
+    } else {
+      fullText = prompt;
+    }
+
+    await humanType(inputBox, fullText);
     await sleep(rand(300, 1000));
 
-    // 4. 发送（只发一次）
+    // 发送（只发一次）
     const sendBtn = findSendBtn();
     if (sendBtn) { await humanClick(sendBtn); }
     else {
@@ -398,7 +408,7 @@ async function doGenerate(prompt, outputName, referenceImages) {
       inputBox.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
     }
 
-    console.log(`  🚀 已发送（${refs.length ? `含${refs.length}张参考图` : "纯文字"}）`);
+    console.log(`  🚀 已发送`);
     const ok = await waitForImage();
     if (!ok) console.log(`  ⚠ 生成超时，兜底查找`);
 

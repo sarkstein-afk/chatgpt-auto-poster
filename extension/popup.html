@@ -85,15 +85,21 @@
 
 <!-- 文件选择 -->
 <div class="section">
-  <label>📄 选择文件</label>
-  <select id="fileSelect" style="width:100%;margin-bottom:6px;">
+  <label>📄 项目文件</label>
+  <select id="fileSelect" style="width:100%;margin-bottom:4px;">
     <option value="">-- 先点「选择项目目录」或手动选文件 --</option>
   </select>
+  <div class="row" style="margin-bottom:4px;">
+    <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:#ccc;cursor:pointer;">
+      <input type="checkbox" id="isTemplate" style="width:auto;accent-color:#e94560;"> ⭐ 这是模板文件（定义风格/主题/配色）
+    </label>
+  </div>
   <div class="row">
     <input type="file" id="pdfFile" accept=".pdf,.pptx,.docx,.xlsx,.txt,.csv,.md" style="padding:4px;">
     <button class="btn-sm" id="btnParse">解析</button>
   </div>
   <div id="pdfStatus"></div>
+  <div style="font-size:10px;color:#888;margin-top:3px;" id="fileRoleHint"></div>
 </div>
 
 <!-- 参考图 -->
