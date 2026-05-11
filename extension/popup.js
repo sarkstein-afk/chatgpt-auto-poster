@@ -132,41 +132,70 @@ async function scanAllProjectFiles(dirHandle) {
   return files;
 }
 
-btnSelectRoot.addEventListener("click", async () => {
+btnSelectRoot.addEventListener("click", async function() {
   try {
-    // 用 id 记住权限，第二次点不会弹选择框
-    rootDirHandle = await window.showDirectoryPicker({ id: "project-root", mode: "read" });
+    rootDirHandle = await window.showDirectoryPicker({ mode: "read" });
 
-    // 扫描子目录 = 项目列表
-    const discoveredProjects = { default: { ...DEFAULT_PROJECT } };
-    for await (const [name, handle] of rootDirHandle.entries()) {
-      if (handle.kind === "directory" && name !== "default") {
-        discoveredProjects[name] = {
-          name, globalInstruction: "", enableReview: true,
-          passScore: 80, maxRetries: 2, reviewPromptTemplate: "",
-        };
+    var foundFiles = [];
+    var discoveredCount = 0;
+
+    // 一次遍历：同时发现项目（子目录）和文件
+    for await (var entry of rootDirHandle.entries()) {
+      var name = entry[0];
+      var handle = entry[1];
+
+      if (handle.kind === "directory") {
+        // 子目录 = 项目
+        if (!projects[name]) {
+          projects[name] = {
+            name: name, globalInstruction: "", enableReview: true,
+            passScore: 80, maxRetries: 2, reviewPromptTemplate: "",
+          };
+          discoveredCount++;
+        }
+        // 扫描该项目的文件
+        for await (var fentry of handle.entries()) {
+          var fname = fentry[0];
+          var fhandle = fentry[1];
+          if (fhandle.kind === "file") {
+            var ext = fname.split(".").pop().toLowerCase();
+            if (["pdf","pptx","docx","xlsx","txt","ppt","doc","xls"].indexOf(ext) !== -1) {
+              foundFiles.push({ name: fname, handle: fhandle, project: name, ext: ext });
+            }
+          }
+        }
+      } else if (handle.kind === "file") {
+        var ext2 = name.split(".").pop().toLowerCase();
+        if (["pdf","pptx","docx","xlsx","txt"].indexOf(ext2) !== -1) {
+          foundFiles.push({ name: name, handle: handle, project: "root", ext: ext2 });
+        }
       }
     }
-    for (const [id, cfg] of Object.entries(discoveredProjects)) {
-      if (!projects[id]) projects[id] = cfg;
-    }
 
-    // 扫描所有文件
-    const foundFiles = await scanAllProjectFiles(rootDirHandle);
-    const displayPath = `已对接（${Object.keys(discoveredProjects).length - 1}个项目，${foundFiles.length}个文件）`;
-    await chrome.storage.local.set({ projects, projectRootPath: displayPath });
+    // 保存
+    var totalProjects = Object.keys(projects).length - 1; // 减去 default
+    var displayPath = "已对接（" + totalProjects + "个项目，" + foundFiles.length + "个文件）";
+    await chrome.storage.local.set({ projects: projects, projectRootPath: displayPath, activeProject: activeProject });
 
     rootPathEl.textContent = displayPath;
     btnScanProjects.style.display = "";
-    updateProjectPathHint();
+    projectPathHint.textContent = "📁 素材：" + (activeProject !== "default" ? activeProject + "/materials/" : "选择项目后显示路径");
     renderProjectList();
 
-    // 填充文件列表并自动解析当前项目下的文件
+    // 自动切到第一个发现的非默认项目
+    var projectKeys = Object.keys(projects).filter(function(k) { return k !== "default"; });
+    if (projectKeys.length > 0) {
+      activeProject = projectKeys[0];
+      projectSelect.value = activeProject;
+      loadActiveProject();
+      await chrome.storage.local.set({ activeProject: activeProject, projects: projects, projectRootPath: displayPath });
+    }
+
     await refreshFileList(foundFiles);
-    pdfStatusEl.innerHTML = `<span class='status status-ok'>✅ ${displayPath}</span>`;
+    pdfStatusEl.innerHTML = "<span class='status status-ok'>✅ " + displayPath + "</span>";
   } catch (e) {
     if (e.name !== "AbortError") {
-      pdfStatusEl.innerHTML = `<span class='status status-err'>❌ ${e.message}</span>`;
+      pdfStatusEl.innerHTML = "<span class='status status-err'>❌ " + e.message + "</span>";
     }
   }
 });
