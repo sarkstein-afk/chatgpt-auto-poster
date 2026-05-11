@@ -9,6 +9,7 @@ const pdfjsReady = (async function init() {
 const projectSelect = document.getElementById("projectSelect");
 const btnNewProject = document.getElementById("btnNewProject");
 const btnDelProject = document.getElementById("btnDelProject");
+const projectPathEl = document.getElementById("projectPath");
 const pdfFileInput = document.getElementById("pdfFile");
 const btnParse = document.getElementById("btnParse");
 const btnStart = document.getElementById("btnStart");
@@ -64,6 +65,7 @@ function loadActiveProject() {
   passScore.value = p.passScore || 80;
   maxRetries.value = p.maxRetries || 2;
   reviewPromptTemplate.value = p.reviewPromptTemplate || "";
+  if (projectPathEl) projectPathEl.textContent = activeProject;
 }
 
 function saveActiveProject() {
@@ -156,8 +158,8 @@ async function checkChatGPT() {
   }
 }
 
-// ====== PDF parsing ======
-btnParse.addEventListener("click", async () => {
+// ====== PDF parsing (auto + manual) ======
+async function parsePDF() {
   const file = pdfFileInput.files[0];
   if (!file) {
     pdfStatusEl.innerHTML = "<span class='status status-err'>Select a PDF file</span>";
@@ -167,7 +169,7 @@ btnParse.addEventListener("click", async () => {
   imageRequests = [];
 
   try {
-    await pdfjsReady; // 确保模块加载完
+    await pdfjsReady;
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
     let globalIdx = 0;
@@ -179,7 +181,6 @@ btnParse.addEventListener("click", async () => {
       let searchFrom = 0;
 
       while (true) {
-        // Support both [illustration: xxx] and 【插图：xxx】
         let startIdx = -1, prefixLen = 0, endChar = "";
         for (const [prefix, len] of [["[illustration:", 13], ["【插图：", 5], ["【插图:", 5]]) {
           const idx = pageText.indexOf(prefix, searchFrom);
@@ -207,7 +208,7 @@ btnParse.addEventListener("click", async () => {
     }
 
     if (imageRequests.length === 0) {
-      pdfStatusEl.innerHTML = "<span class='status status-warn'>No [illustration: xxx] markers found in PDF</span>";
+      pdfStatusEl.innerHTML = "<span class='status status-warn'>No markers found</span>";
       resultSection.style.display = "none";
       btnStart.disabled = true;
       return;
@@ -220,7 +221,12 @@ btnParse.addEventListener("click", async () => {
   } catch (e) {
     pdfStatusEl.innerHTML = `<span class='status status-err'>Parse error: ${e.message}</span>`;
   }
-});
+}
+
+// Auto-parse when file selected
+pdfFileInput.addEventListener("change", parsePDF);
+// Also manual parse button
+btnParse.addEventListener("click", parsePDF);
 
 // ====== Rendering ======
 function renderTaskList() {
