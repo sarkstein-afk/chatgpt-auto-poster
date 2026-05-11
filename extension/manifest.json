@@ -1,8 +1,14 @@
 {
   "manifest_version": 3,
-  "name": "ChatGPT 自动出图助手",
+  "name": "ChatGPT Auto Poster",
   "version": "1.0",
-  "description": "PDF插图自动生成 + 网页素材批量生图，一键搞定",
+  "description": "Auto-generate DALL-E images from PDF illustration markers with AI review",
+
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
 
   "permissions": ["tabs", "downloads", "storage"],
 
@@ -10,7 +16,7 @@
 
   "action": {
     "default_popup": "popup.html",
-    "default_title": "ChatGPT 自动出图"
+    "default_title": "ChatGPT Auto Poster"
   },
 
   "content_scripts": [

@@ -1,5 +1,9 @@
-import * as pdfjsLib from "./lib/pdf.min.mjs";
-pdfjsLib.GlobalWorkerOptions.workerSrc = "./lib/pdf.worker.min.mjs";
+let pdfjsLib = null;
+const pdfjsReady = (async function init() {
+  const mod = await import("./lib/pdf.min.mjs");
+  pdfjsLib = mod;
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "./lib/pdf.worker.min.mjs";
+})();
 
 // ====== DOM ======
 const projectSelect = document.getElementById("projectSelect");
@@ -163,6 +167,7 @@ btnParse.addEventListener("click", async () => {
   imageRequests = [];
 
   try {
+    await pdfjsReady; // 确保模块加载完
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
     let globalIdx = 0;
