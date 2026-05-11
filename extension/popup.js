@@ -43,6 +43,9 @@ const scrapeStatus = document.getElementById("scrapeStatus");
 let savedUrls = []; // 用户添加的网页链接
 let scrapedText = "";
 let scrapedImages = [];
+let refImageDataUrls = [];
+const refImagesEl = document.getElementById("refImages");
+const refStatusEl = document.getElementById("refStatus");
 
 // ====== State ======
 let imageRequests = [];
@@ -474,6 +477,23 @@ btnScrapeAll.addEventListener("click", async function() {
   scrapeStatus.textContent = "✅ 抓完 " + savedUrls.length + "个链接 (" + scrapedImages.length + "张图)";
 });
 
+// ====== 参考图读取 ======
+refImagesEl.addEventListener("change", async function() {
+  refImageDataUrls = [];
+  var files = Array.from(refImagesEl.files);
+  if (files.length === 0) { refStatusEl.textContent = ""; return; }
+  refStatusEl.textContent = "⏳ 读取中...";
+  for (var i = 0; i < files.length; i++) {
+    var dataUrl = await new Promise(function(r) {
+      var reader = new FileReader();
+      reader.onload = function() { r(reader.result); };
+      reader.readAsDataURL(files[i]);
+    });
+    refImageDataUrls.push(dataUrl);
+  }
+  refStatusEl.textContent = "✅ " + files.length + "张参考图就绪";
+});
+
 // ====== PDF 页面渲染为缩略图 ======
 async function renderPDFPage(pageNum) {
   return renderPDFPageGeneric(pdfDoc, pageNum);
@@ -836,7 +856,9 @@ btnStart.addEventListener("click", async () => {
   }
 
   // Build tasks: one per marker/page, each independent
-  var tasks = imageRequests.map(function(r) {
+  // First task carries ref images (limit 5 to avoid timeout)
+  var refsForTask = refImageDataUrls.slice(0, 5);
+  var tasks = imageRequests.map(function(r, i) {
     return {
       id: "P" + r.page + "_" + r.index,
       prompt: instruction + "\n\n具体要求：" + r.description + scrapedPrompt + "\n\n重要规则：画面中的文字必须清晰可读，不能出现乱码、扭曲、拼写错误或无法辨认的字符。",
@@ -844,6 +866,7 @@ btnStart.addEventListener("click", async () => {
       outputName: "P" + r.page + "_" + r.index + "_" + r.description.replace(/[\\/:*?"<>|]/g, "_").slice(0, 40) + ".png",
       page: r.page,
       index: r.index,
+      refImages: i === 0 ? refsForTask : [],
     };
   });
 

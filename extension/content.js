@@ -17,7 +17,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   if (msg.type === "generate") {
     currentJob = {};
-    doGenerate(msg.prompt, msg.outputName, currentJob).then(function(r) { currentJob = null; sendResponse(r); });
+    doGenerate(msg.prompt, msg.outputName, currentJob, msg.refImages || []).then(function(r) { currentJob = null; sendResponse(r); });
     return true;
   }
 
@@ -216,11 +216,13 @@ async function waitForUploadComplete(timeout = 30000) {
 }
 
 // ==================== 等待生成/响应 ====================
-async function waitForImage(timeout = 180000) {
+async function waitForImage(timeout) {
+  timeout = timeout || 180000;
   const start = Date.now();
   const patterns = ["oaidalleapi", "files.oaiusercontent.com", "dall-e"];
 
   while (Date.now() - start < timeout) {
+    if (!currentJob) throw new Error("Cancelled");
     if (document.querySelector('[data-testid="stop-button"]')) {
       await sleep(jitter(3000, 0.4));
       continue;
@@ -246,6 +248,7 @@ async function waitForResponseComplete(timeout) {
   var start = Date.now();
 
   while (Date.now() - start < timeout) {
+    if (!currentJob) throw new Error("Cancelled");
     // Stop 按钮还在 → 还在生成
     if (document.querySelector('[data-testid="stop-button"]')) {
       await sleep(2000);
@@ -391,16 +394,29 @@ function normalizeScore(result) {
 }
 
 // ==================== 核心：生成一张图 ====================
-async function doGenerate(prompt, outputName, job) {
+async function doGenerate(prompt, outputName, job, refImages) {
   console.log("[Generate] " + outputName);
 
   try {
-    if (job && !currentJob) throw new Error("Cancelled");
+    // 上传参考图
+    var refs = refImages || [];
+    if (refs.length > 0 && job === currentJob) {
+      for (var ri = 0; ri < refs.length && job === currentJob; ri++) {
+        await uploadImage(refs[ri]);
+        await waitForUploadComplete();
+        if (job !== currentJob) throw new Error("Cancelled");
+        await sleep(rand(200, 500));
+      }
+    }
+
+    if (job !== currentJob) throw new Error("Cancelled");
     var inputBox = await waitForInput();
     if (!inputBox) return { success: false, error: "Input box not found" };
 
+    if (job !== currentJob) throw new Error("Cancelled");
     await sleep(rand(300, 1200));
     await humanType(inputBox, prompt);
+    if (job !== currentJob) throw new Error("Cancelled");
     await sleep(rand(400, 1500));
 
     var sendBtn = findSendBtn();
