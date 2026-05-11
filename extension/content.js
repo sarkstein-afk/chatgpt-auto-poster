@@ -365,13 +365,6 @@ async function doGenerate(prompt, outputName) {
   console.log("[Generate] " + outputName);
 
   try {
-    // 新开对话
-    var newChatBtn =
-      document.querySelector('a[href="/"]') ||
-      document.querySelector('[data-testid="new-chat"]') ||
-      document.querySelector('button[aria-label*="New chat"], button[aria-label*="new chat"]');
-    if (newChatBtn) { newChatBtn.click(); await sleep(2500); }
-
     var inputBox = await waitForInput();
     if (!inputBox) return { success: false, error: "Input box not found" };
 
