@@ -125,52 +125,22 @@ async function humanType(el, text) {
     return;
   }
 
-  // ProseMirror — 逐字插入 + 随机打错回删
-  for (let i = 0; i < text.length; i++) {
-    const char = text[i];
-    const willTypo = char.charCodeAt(0) < 128 && Math.random() < 0.03;
-    const actualChar = willTypo ? randomTypo(char) : char;
-    const isAscii = actualChar.charCodeAt(0) < 128;
+  // ProseMirror — 一次性插入全文，避免逐字竞态乱码
+  // 先模拟选中已有内容
+  var range = document.createRange();
+  range.selectNodeContents(el);
+  var sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
 
-    const keyInit = {
-      key: actualChar, bubbles: true, cancelable: true,
-      code: isAscii ? ("Key" + actualChar.toUpperCase()) : "",
-      keyCode: isAscii ? actualChar.charCodeAt(0) : 229,
-      which: isAscii ? actualChar.charCodeAt(0) : 229,
-    };
-    el.dispatchEvent(new KeyboardEvent("keydown", keyInit));
-    el.dispatchEvent(new InputEvent("beforeinput", { inputType: "insertText", data: actualChar, bubbles: true, cancelable: true }));
-    document.execCommand("insertText", false, actualChar);
-    el.dispatchEvent(new InputEvent("input", { inputType: "insertText", data: actualChar, bubbles: true }));
-    el.dispatchEvent(new KeyboardEvent("keyup", keyInit));
+  // 模拟 "打字" 的等待时间（人不会瞬间粘贴）
+  var typingDelay = Math.min(text.length * 15, 3000);
+  await sleep(rand(200, 600));
+  await sleep(rand(typingDelay * 0.3, typingDelay));
 
-    if (willTypo) {
-      await sleep(rand(100, 300));
-      const bsInit = { key: "Backspace", code: "Backspace", keyCode: 8, which: 8, bubbles: true };
-      el.dispatchEvent(new KeyboardEvent("keydown", bsInit));
-      el.dispatchEvent(new InputEvent("beforeinput", { inputType: "deleteContentBackward", data: null, bubbles: true, cancelable: true }));
-      document.execCommand("delete", false, null);
-      el.dispatchEvent(new InputEvent("input", { inputType: "deleteContentBackward", data: null, bubbles: true }));
-      el.dispatchEvent(new KeyboardEvent("keyup", bsInit));
-      await sleep(rand(150, 400));
-
-      const isAscii2 = char.charCodeAt(0) < 128;
-      const fixInit = {
-        key: char, bubbles: true, cancelable: true,
-        code: isAscii2 ? ("Key" + char.toUpperCase()) : "",
-        keyCode: isAscii2 ? char.charCodeAt(0) : 229,
-        which: isAscii2 ? char.charCodeAt(0) : 229,
-      };
-      el.dispatchEvent(new KeyboardEvent("keydown", fixInit));
-      el.dispatchEvent(new InputEvent("beforeinput", { inputType: "insertText", data: char, bubbles: true, cancelable: true }));
-      document.execCommand("insertText", false, char);
-      el.dispatchEvent(new InputEvent("input", { inputType: "insertText", data: char, bubbles: true }));
-      el.dispatchEvent(new KeyboardEvent("keyup", fixInit));
-    }
-
-    await sleep(/[一-鿿]/.test(char) ? rand(60, 180) : rand(30, 120));
-    if (Math.random() < 0.02) await sleep(rand(200, 800));
-  }
+  // 一次性插入
+  document.execCommand("insertText", false, text);
+  el.dispatchEvent(new InputEvent("input", { inputType: "insertText", data: text, bubbles: true }));
   el.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
