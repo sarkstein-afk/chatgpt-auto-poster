@@ -7,7 +7,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === "generate") {
-    doGenerate(msg.prompt, msg.outputName).then(sendResponse);
+    doGenerate(msg.prompt, msg.outputName, msg.referenceImages).then(sendResponse);
     return true;
   }
 
@@ -353,18 +353,44 @@ function normalizeScore(result) {
   return result;
 }
 
-// ==================== 核心：生成一张图 ====================
-async function doGenerate(prompt, outputName) {
-  console.log(`🎨 [生图] ${outputName}`);
+// ==================== 核心：生成一张图（含参考图一次性上传） ====================
+async function doGenerate(prompt, outputName, referenceImages) {
+  console.log(`🎨 [生图] ${outputName}${referenceImages?.length ? ` +${referenceImages.length}张参考图` : ""}`);
 
   try {
+    // 0. 新开对话
+    const newChatBtn =
+      document.querySelector('a[href="/"]') ||
+      document.querySelector('[data-testid="new-chat"]') ||
+      document.querySelector('button[aria-label*="New chat"], button[aria-label*="new chat"]');
+    if (newChatBtn) {
+      newChatBtn.click();
+      await sleep(2000);
+    }
+
+    // 1. 等输入框出现
     const inputBox = await waitForInput();
     if (!inputBox) return { success: false, error: "找不到输入框" };
 
-    await sleep(rand(300, 1200));
-    await humanType(inputBox, prompt);
-    await sleep(rand(400, 1500));
+    // 2. 上传参考图（全部一次性上传）
+    const refs = referenceImages || [];
+    if (refs.length > 0) {
+      for (let i = 0; i < refs.length; i++) {
+        const uploaded = await uploadImage(refs[i]);
+        if (uploaded) {
+          await waitForUploadComplete();
+          await sleep(rand(300, 800));
+        }
+      }
+      console.log(`  📎 ${refs.length} 张参考图已上传`);
+    }
 
+    // 3. 输入文字（和参考图在同一个消息里）
+    await sleep(rand(200, 600));
+    await humanType(inputBox, prompt);
+    await sleep(rand(300, 1000));
+
+    // 4. 发送（只发一次）
     const sendBtn = findSendBtn();
     if (sendBtn) { await humanClick(sendBtn); }
     else {
@@ -372,7 +398,7 @@ async function doGenerate(prompt, outputName) {
       inputBox.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
     }
 
-    console.log(`  🚀 已发送`);
+    console.log(`  🚀 已发送（${refs.length ? `含${refs.length}张参考图` : "纯文字"}）`);
     const ok = await waitForImage();
     if (!ok) console.log(`  ⚠ 生成超时，兜底查找`);
 
@@ -388,7 +414,6 @@ async function doGenerate(prompt, outputName) {
 
     if (!imgUrl) return { success: false, error: "没找到生成的图片" };
 
-    // 通知 background 下载
     try {
       await chrome.runtime.sendMessage({ type: "download", url: imgUrl, filename: outputName });
     } catch {}

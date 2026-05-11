@@ -158,6 +158,7 @@ async function startProcessing() {
         type: "generate",
         prompt: currentPrompt,
         outputName: task.outputName,
+        referenceImages: task.referenceImages,
       }, 2);
 
       if (!genResult?.success) {

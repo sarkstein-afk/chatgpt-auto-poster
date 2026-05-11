@@ -27,9 +27,13 @@ const progressBar = document.getElementById("progressBar");
 const progressText = document.getElementById("progressText");
 const gptStatusEl = document.getElementById("gptStatus");
 const pdfStatusEl = document.getElementById("pdfStatus");
+const refImagesEl = document.getElementById("refImages");
+const refStatusEl = document.getElementById("refStatus");
 
 // ====== State ======
 let imageRequests = [];
+let referenceImages = []; // 参考图 data URLs
+let pdfDoc = null; // 解析后的 PDF 对象（用于渲染页面缩略图）
 let pollTimer = null;
 let projects = {};
 let activeProject = "default";
@@ -201,6 +205,42 @@ btnDelProject.addEventListener("click", () => {
   el.addEventListener("change", saveActiveProject)
 );
 
+// ====== 参考图读取 ======
+refImagesEl.addEventListener("change", async () => {
+  referenceImages = [];
+  const files = Array.from(refImagesEl.files);
+  if (files.length === 0) {
+    refStatusEl.textContent = "";
+    return;
+  }
+
+  refStatusEl.textContent = `⏳ 读取中...`;
+  for (const file of files) {
+    const dataUrl = await new Promise(r => {
+      const reader = new FileReader();
+      reader.onload = () => r(reader.result);
+      reader.readAsDataURL(file);
+    });
+    referenceImages.push(dataUrl);
+  }
+  refStatusEl.textContent = `✅ ${files.length} 张参考图已就绪（将和 Prompt 一起发送）`;
+});
+
+// ====== PDF 页面渲染为缩略图 ======
+async function renderPDFPage(pageNum) {
+  if (!pdfDoc) return null;
+  try {
+    const page = await pdfDoc.getPage(pageNum);
+    const scale = 0.6;
+    const viewport = page.getViewport({ scale });
+    const canvas = document.createElement("canvas");
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+    return canvas.toDataURL("image/jpeg", 0.75);
+  } catch { return null; }
+}
+
 // ====== ChatGPT 连接检查 ======
 async function checkChatGPT() {
   try {
@@ -260,6 +300,7 @@ async function parsePDF(file) {
   await pdfjsReady;
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  pdfDoc = pdf; // 存住用于后续渲染页面缩略图
   const markers = [];
   const pageTexts = [];
 
@@ -536,6 +577,22 @@ btnStart.addEventListener("click", async () => {
   const threshold = parseInt(passScore.value) || 80;
   const reviewTmpl = reviewPromptTemplate.value.trim();
 
+  // 渲染 PDF 页面缩略图（缓存：每页只渲染一次）
+  const pageThumbCache = {};
+  const allRefImages = [...referenceImages]; // 用户选的参考图
+  if (pdfDoc) {
+    progressText.textContent = "正在渲染页面缩略图...";
+  }
+  for (const r of imageRequests) {
+    if (pdfDoc && !pageThumbCache[r.page]) {
+      const thumb = await renderPDFPage(r.page);
+      if (thumb) {
+        pageThumbCache[r.page] = thumb;
+        allRefImages.push(thumb); // PDF 页面缩略图也作为参考
+      }
+    }
+  }
+
   const tasks = imageRequests.map((r) => ({
     id: `P${r.page}_${r.index}`,
     prompt: `${instruction}\n\n具体需求：${r.description}\n\n重要规则：画面中的文字必须清晰可读，不能出现乱码、扭曲、拼写错误或无法辨认的字符。`,
@@ -543,6 +600,7 @@ btnStart.addEventListener("click", async () => {
     outputName: `P${r.page}_${r.index}_${r.description.replace(/[\\/:*?"<>|]/g, "_").slice(0, 40)}.png`,
     page: r.page,
     index: r.index,
+    referenceImages: allRefImages.length > 0 ? allRefImages : undefined,
   }));
 
   const enqueueResp = await chrome.runtime.sendMessage({
