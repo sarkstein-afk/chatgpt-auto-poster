@@ -174,13 +174,13 @@ async function startProcessing() {
       task._retries = attempt;
       await persistQueue();
 
-      // 1. Generate
+      // 1. Generate (no retry - generation takes too long)
       var genResult = await sendWithRetry(generatorTabId, {
         type: "generate",
         prompt: currentPrompt,
         outputName: task.outputName,
         refImages: task.refImages || [],
-      }, 2);
+      }, 1);
 
       if (!genResult || !genResult.success) {
         task._error = (genResult && genResult.error) || "Generation failed";
@@ -376,10 +376,15 @@ async function sendWithRetry(tabId, msg, maxRetries) {
     try {
       var result = await chrome.tabs.sendMessage(tabId, msg);
       if (result) return result;
+      // Got undefined - content script returned but didn't respond. Don't retry.
+      return { success: false, error: "No response from content script" };
     } catch (e) {
-      console.log("  Retry " + (i + 1) + "/" + maxRetries + ": " + e.message);
+      // Only retry on connection errors
+      if (i < maxRetries - 1) {
+        console.log("  Retry " + (i + 1) + "/" + maxRetries + ": " + e.message);
+        await sleep(3000);
+      }
     }
-    if (i < maxRetries - 1) await sleep(3000);
   }
   return { success: false, error: "Communication timeout" };
 }
