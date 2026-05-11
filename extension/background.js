@@ -14,6 +14,15 @@ let taskResults = {};
 let generatorTabId = null;
 let reviewerTabId = null;
 let reviewStandardsSent = false;
+let paused = false;
+
+// ====== Send cancel to all content scripts ======
+async function sendCancelToAll() {
+  var tabs = await chrome.tabs.query({ url: ["https://chatgpt.com/*", "https://chat.openai.com/*"] });
+  for (var i = 0; i < tabs.length; i++) {
+    try { await chrome.tabs.sendMessage(tabs[i].id, { type: "cancel" }); } catch(e) {}
+  }
+}
 
 // ====== Persist ======
 async function persistQueue() {
@@ -94,6 +103,7 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
     case "clearQueue": {
       taskQueue = [];
       isRunning = false;
+      paused = false;
       completedCount = 0;
       errorCount = 0;
       taskResults = {};
@@ -101,6 +111,22 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
       reviewerTabId = null;
       reviewStandardsSent = false;
       persistQueue();
+      // 通知 content script 取消当前操作
+      sendCancelToAll();
+      sendResponse({ ok: true });
+      break;
+    }
+
+    case "pauseQueue": {
+      paused = true;
+      console.log("Queue paused");
+      sendResponse({ ok: true });
+      break;
+    }
+
+    case "resumeQueue": {
+      paused = false;
+      console.log("Queue resumed");
       sendResponse({ ok: true });
       break;
     }
@@ -129,6 +155,9 @@ async function startProcessing() {
   await persistQueue();
 
   while (taskQueue.length > 0) {
+    // 检查暂停
+    while (paused) { await sleep(1000); }
+
     var task = taskQueue[0];
     await persistQueue();
 

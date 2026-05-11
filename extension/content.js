@@ -1,18 +1,29 @@
 // ====== ChatGPT 页面操控（生成 + 审核双模式，反检测版） ======
 
+var currentJob = null; // track running job to allow cancel
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "ping") {
     sendResponse({ ok: true });
     return;
   }
 
+  if (msg.type === "cancel") {
+    currentJob = null; // abort running job
+    console.log("Cancelled");
+    sendResponse({ ok: true });
+    return;
+  }
+
   if (msg.type === "generate") {
-    doGenerate(msg.prompt, msg.outputName).then(sendResponse);
+    currentJob = {};
+    doGenerate(msg.prompt, msg.outputName, currentJob).then(function(r) { currentJob = null; sendResponse(r); });
     return true;
   }
 
   if (msg.type === "review") {
-    doReview(msg.imageUrl, msg.reviewPrompt).then(sendResponse);
+    currentJob = {};
+    doReview(msg.imageUrl, msg.reviewPrompt, currentJob).then(function(r) { currentJob = null; sendResponse(r); });
     return true;
   }
 });
@@ -380,10 +391,11 @@ function normalizeScore(result) {
 }
 
 // ==================== 核心：生成一张图 ====================
-async function doGenerate(prompt, outputName) {
+async function doGenerate(prompt, outputName, job) {
   console.log("[Generate] " + outputName);
 
   try {
+    if (job && !currentJob) throw new Error("Cancelled");
     var inputBox = await waitForInput();
     if (!inputBox) return { success: false, error: "Input box not found" };
 

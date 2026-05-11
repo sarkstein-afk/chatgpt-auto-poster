@@ -16,6 +16,9 @@ const projectPathHint = document.getElementById("projectPathHint");
 const pdfFileInput = document.getElementById("pdfFile");
 const btnParse = document.getElementById("btnParse");
 const btnStart = document.getElementById("btnStart");
+const btnPause = document.getElementById("btnPause");
+const btnStop = document.getElementById("btnStop");
+const controlRow = document.getElementById("controlRow");
 const globalInstruction = document.getElementById("globalInstruction");
 const enableReview = document.getElementById("enableReview");
 const maxRetries = document.getElementById("maxRetries");
@@ -389,16 +392,8 @@ scrapeUrlInput.addEventListener("keydown", function(e) {
 
 btnScrapeAll.addEventListener("click", async function() {
   if (!savedUrls.length) {
-    // 没链接就抓当前活动页面
-    try {
-      var tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tabs.length || (tabs[0].url && tabs[0].url.startsWith("chrome"))) {
-        scrapeStatus.textContent = "请先打开一个网页或添加链接";
-        return;
-      }
-      savedUrls.push(tabs[0].url);
-      renderUrlTags();
-    } catch(e) {}
+    scrapeStatus.textContent = "请先添加链接再抓取";
+    return;
   }
 
   scrapeStatus.textContent = "⏳ 抓取中 (0/" + savedUrls.length + ")...";
@@ -407,29 +402,53 @@ btnScrapeAll.addEventListener("click", async function() {
 
   for (var i = 0; i < savedUrls.length; i++) {
     var url = savedUrls[i];
-    scrapeStatus.textContent = "⏳ 抓取中 (" + (i + 1) + "/" + savedUrls.length + ")...";
+    // 确保 URL 合法
+    if (!url.startsWith("http")) url = "https://" + url;
+    scrapeStatus.textContent = "⏳ 抓取中 (" + (i + 1) + "/" + savedUrls.length + ") " + url.slice(0, 40) + "...";
+
     try {
-      // 打开隐藏标签页，等页面渲染完成后再抓 DOM
       var tab = await chrome.tabs.create({ url: url, active: false });
+
+      // 等页面加载完成
       await new Promise(function(resolve) {
-        var timeout = setTimeout(function() { resolve(); }, 15000);
+        var done = false;
+        var timeout = setTimeout(function() { if (!done) { done = true; resolve(); } }, 20000);
         chrome.tabs.onUpdated.addListener(function listener(tid, info) {
-          if (tid === tab.id && info.status === "complete") {
+          if (tid === tab.id && info.status === "complete" && !done) {
             clearTimeout(timeout);
+            done = true;
             chrome.tabs.onUpdated.removeListener(listener);
-            setTimeout(resolve, 2000); // 额外等 2 秒 JS 渲染
+            setTimeout(resolve, 3000);
           }
         });
       });
 
-      // 在渲染好的页面里执行 DOM 抓取
+      // 再确认页面真的加载完了（有些 SPA 需要等 JS 渲染）
+      await new Promise(function(r) { setTimeout(r, 2000); });
+
+      // 验证标签页还在且 URL 匹配
+      try {
+        var checkTab = await chrome.tabs.get(tab.id);
+        console.log("Scraping: " + checkTab.url + " (expected: " + url + ")");
+      } catch(e) {
+        // 标签页可能被关闭了
+        scrapedText += "\n\n【来源 " + (i + 1) + "：页面加载失败】";
+        continue;
+      }
+
       var results = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: function() {
           var title = document.title || "";
-          var bodyText = (document.body ? document.body.innerText : "").replace(/\s{3,}/g, "\n").slice(0, 3000);
+          var bodyText = "";
+          // 优先从 article/main 提取
+          var main = document.querySelector("article, main, [class*=content], [class*=article]");
+          var source = main || document.body;
+          if (source) bodyText = source.innerText;
+          bodyText = bodyText.replace(/\s{3,}/g, "\n").slice(0, 3000);
+
           var imgs = Array.from(document.querySelectorAll("img"))
-            .filter(function(img) { return img.naturalWidth > 150 && img.src.startsWith("http"); })
+            .filter(function(img) { return img.naturalWidth > 150 && img.src.indexOf("http") === 0; })
             .map(function(img) { return img.src; })
             .slice(0, 30);
           return { title: title, text: bodyText, images: imgs, url: location.href };
@@ -437,11 +456,16 @@ btnScrapeAll.addEventListener("click", async function() {
       });
 
       // 关闭标签页
-      chrome.tabs.remove(tab.id);
+      try { chrome.tabs.remove(tab.id); } catch(e) {}
 
       var data = results[0].result;
-      scrapedText += "\n\n【来源 " + (i + 1) + "：" + data.title + "】\n" + data.text;
-      scrapedImages = scrapedImages.concat(data.images);
+      // 验证确实抓的是目标页面
+      if (data.url.indexOf("chatgpt.com") !== -1 && url.indexOf("chatgpt") === -1) {
+        scrapedText += "\n\n【来源 " + (i + 1) + "：抓取异常（页面重定向到了 " + data.url + "）】";
+      } else {
+        scrapedText += "\n\n【来源 " + (i + 1) + "：" + data.title + "】\n" + data.text;
+        scrapedImages = scrapedImages.concat(data.images);
+      }
     } catch(e) {
       scrapedText += "\n\n【来源 " + (i + 1) + "：抓取失败 - " + e.message + "】";
     }
@@ -841,8 +865,42 @@ btnStart.addEventListener("click", async () => {
   }
 
   progressText.textContent = `${tasks.length} 个任务已入队${useReview ? "（审核模式）" : ""}`;
+  controlRow.style.display = "";
+  btnPause.textContent = "⏸ 暂停";
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(pollProgress, 2000);
+});
+
+// ====== 终止 ======
+btnStop.addEventListener("click", async function() {
+  await chrome.runtime.sendMessage({ type: "clearQueue" });
+  // 通知所有 ChatGPT 标签页取消当前操作
+  var tabs = await chrome.tabs.query({ url: ["https://chatgpt.com/*", "https://chat.openai.com/*"] });
+  for (var t of tabs) {
+    try { await chrome.tabs.sendMessage(t.id, { type: "cancel" }); } catch(e) {}
+  }
+  clearInterval(pollTimer);
+  pollTimer = null;
+  controlRow.style.display = "none";
+  btnStart.disabled = false;
+  btnStart.textContent = "▶ 开始自动生成";
+  btnParse.disabled = false;
+  progressText.textContent = "已终止";
+});
+
+// ====== 暂停/继续 ======
+var isPaused = false;
+btnPause.addEventListener("click", async function() {
+  isPaused = !isPaused;
+  if (isPaused) {
+    btnPause.textContent = "▶ 继续";
+    btnPause.style.background = "#4caf50";
+    await chrome.runtime.sendMessage({ type: "pauseQueue" });
+  } else {
+    btnPause.textContent = "⏸ 暂停";
+    btnPause.style.background = "";
+    await chrome.runtime.sendMessage({ type: "resumeQueue" });
+  }
 });
 
 // ====== 轮询进度 ======
@@ -872,6 +930,7 @@ async function pollProgress() {
     if (!running && done >= total && total > 0) {
       clearInterval(pollTimer);
       pollTimer = null;
+      controlRow.style.display = "none";
       btnStart.textContent = "✅ 全部完成";
       btnParse.disabled = false;
       progressText.textContent = `完成！${completed}✅ ${errors}❌`;
