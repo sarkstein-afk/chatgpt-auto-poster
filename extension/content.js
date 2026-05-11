@@ -408,10 +408,6 @@ async function doGenerate(prompt, outputName) {
 
     if (!imgUrl) return { success: false, error: "No image found" };
 
-    try {
-      await chrome.runtime.sendMessage({ type: "download", url: imgUrl, filename: outputName });
-    } catch(e) {}
-
     console.log("  Done: " + outputName);
     return { success: true, imageUrl: imgUrl };
 

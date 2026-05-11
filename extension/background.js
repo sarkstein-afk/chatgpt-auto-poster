@@ -163,9 +163,10 @@ async function startProcessing() {
       var imageUrl = genResult.imageUrl;
       task._lastImageUrl = imageUrl;
 
-      // 2. No review? Done
+      // 2. No review? Download and done
       if (!enableReview || !imageUrl) {
         passed = true;
+        downloadImage(imageUrl, task.outputName);
         break;
       }
 
@@ -197,6 +198,7 @@ async function startProcessing() {
       if (score >= threshold) {
         console.log("PASS (" + score + " >= " + threshold + ")");
         passed = true;
+        downloadImage(imageUrl, task.outputName);
         break;
       }
 
@@ -273,6 +275,21 @@ function revisePrompt(originalPrompt, feedback) {
     "",
     "IMPORTANT: Do NOT just re-generate the same thing. Address EACH issue listed above explicitly."
   ].join("\n");
+}
+
+// ====== Download helper ======
+function downloadImage(url, filename) {
+  chrome.downloads.download({
+    url: url,
+    filename: DOWNLOAD_DIR + "/" + filename,
+    saveAs: false,
+  }, function(id) {
+    if (chrome.runtime.lastError) {
+      console.log("Download failed: " + chrome.runtime.lastError.message);
+    } else {
+      console.log("Downloaded: " + filename);
+    }
+  });
 }
 
 // ====== Fail fast ======
