@@ -263,12 +263,7 @@ function buildReviewPrompt(task, generationPrompt) {
     ].join("\n");
   }
 
-  return [
-    "Review this image (same criteria as before).",
-    "Original requirements: " + reqs.slice(0, 200),
-    "",
-    'JSON: {"score":<0-100>,"passed":<score>=' + threshold + '>,"issues":["..."],"verdict":"...","fixInstructions":"specific fixes if score<' + threshold + '"}'
-  ].join("\n");
+  return "Review this image. Same JSON format.";
 }
 
 // ====== Revise prompt ======
