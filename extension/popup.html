@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { width:420px; font-family:"Microsoft YaHei",sans-serif; background:#1a1a2e; color:#eee; padding:16px; }
+  h2 { font-size:16px; margin-bottom:12px; display:flex; align-items:center; gap:8px; }
+  .badge { font-size:11px; background:#0f3460; color:#e94560; padding:2px 8px; border-radius:10px; }
+
+  .section { background:#16213e; border-radius:8px; padding:12px; margin-bottom:10px; }
+  .section label { display:block; font-size:12px; color:#aaa; margin-bottom:4px; }
+  .section textarea, .section input, .section select {
+    width:100%; padding:8px; border-radius:6px; border:1px solid #0f3460;
+    background:#0f3460; color:#eee; font-size:12px; resize:vertical;
+    font-family:inherit;
+  }
+  .section textarea { height:80px; }
+
+  .row { display:flex; gap:8px; align-items:center; }
+  .row input { flex:1; }
+
+  button {
+    border:none; border-radius:6px; padding:8px 16px; font-size:13px;
+    cursor:pointer; font-weight:bold; transition:all .2s;
+  }
+  .btn-primary { background:#e94560; color:#fff; width:100%; padding:10px; font-size:14px; }
+  .btn-primary:hover { background:#ff6b81; }
+  .btn-primary:disabled { background:#555; cursor:not-allowed; }
+  .btn-sm { background:#0f3460; color:#eee; padding:6px 12px; font-size:11px; }
+  .btn-sm:hover { background:#1a4a8a; }
+  .btn-xs { background:transparent; color:#e94560; border:1px solid #e94560; padding:4px 8px; font-size:10px; border-radius:4px; cursor:pointer; }
+  .btn-xs:hover { background:#e9456022; }
+
+  .status { font-size:11px; padding:4px 8px; border-radius:4px; margin:4px 0; }
+  .status-ok { background:#1a3a1a; color:#4caf50; }
+  .status-err { background:#3a1a1a; color:#f44336; }
+  .status-warn { background:#3a3a1a; color:#ff9800; }
+
+  .task-list { max-height:180px; overflow-y:auto; }
+  .task-item { display:flex; align-items:center; gap:8px; padding:6px 8px;
+    background:#0f3460; border-radius:4px; margin-bottom:4px; font-size:11px; }
+  .task-item .num { color:#e94560; font-weight:bold; min-width:24px; }
+  .task-item .info { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .task-item.done { opacity:0.5; }
+  .task-item.done .info { text-decoration:line-through; }
+
+  .progress-bar { height:4px; background:#0f3460; border-radius:2px; margin:8px 0; overflow:hidden; }
+  .progress-bar .fill { height:100%; background:#e94560; transition:width .3s; border-radius:2px; }
+
+  .help { font-size:10px; color:#666; margin-top:6px; line-height:1.5; }
+  .help code { background:#0f3460; padding:1px 4px; border-radius:2px; }
+
+  select { cursor:pointer; }
+  input[type="checkbox"] { cursor:pointer; accent-color:#e94560; }
+</style>
+</head>
+<body>
+
+<h2>
+  ChatGPT Auto Poster
+  <span class="badge" id="modeBadge">v2</span>
+</h2>
+
+<!-- 项目选择 -->
+<div class="section">
+  <label>📁 项目</label>
+  <div class="row">
+    <select id="projectSelect" style="flex:1;">
+      <option value="default">默认项目</option>
+    </select>
+    <button class="btn-xs" id="btnNewProject" title="新建项目">+新</button>
+    <button class="btn-xs" id="btnDelProject" title="删除当前项目" style="color:#f44336;border-color:#f44336;">删除</button>
+  </div>
+</div>
+
+<!-- PDF -->
+<div class="section">
+  <label>📄 PDF 文件（含【插图：xxx】标记）</label>
+  <div class="row">
+    <input type="file" id="pdfFile" accept=".pdf" style="padding:4px;">
+    <button class="btn-sm" id="btnParse">解析</button>
+  </div>
+  <div id="pdfStatus"></div>
+</div>
+
+<!-- 解析结果 -->
+<div class="section" id="resultSection" style="display:none;">
+  <label>插图标记</label>
+  <div class="task-list" id="taskList"></div>
+  <div class="progress-bar"><div class="fill" id="progressBar" style="width:0%"></div></div>
+  <div class="row" style="justify-content:space-between; margin-top:8px;">
+    <span style="font-size:11px; color:#aaa;" id="progressText">Ready</span>
+    <span style="font-size:11px; color:#aaa;" id="gptStatus">Not connected</span>
+  </div>
+</div>
+
+<!-- 审核设置 -->
+<div class="section">
+  <label>AI Review (GPT-4V scores each image)</label>
+  <div class="row" style="align-items:center; margin-bottom:8px;">
+    <input type="checkbox" id="enableReview" checked style="width:auto; margin-right:4px;">
+    <span style="font-size:12px;">Enable</span>
+    <span style="font-size:11px; color:#aaa;">Pass >=</span>
+    <input type="number" id="passScore" value="80" min="50" max="100" step="5" style="width:50px; text-align:center;">
+    <span style="font-size:11px; color:#aaa;">pts</span>
+    <span style="font-size:11px; color:#aaa; margin-left:4px;">Max retries</span>
+    <input type="number" id="maxRetries" value="2" min="0" max="5" style="width:50px; text-align:center;">
+  </div>
+  <textarea id="reviewPromptTemplate" placeholder="Custom review criteria (optional)&#10;Leave blank to use default template" style="height:40px; font-size:11px;"></textarea>
+</div>
+
+<!-- 风格设置 -->
+<div class="section">
+  <label>Prompt / Style requirements</label>
+  <textarea id="globalInstruction" placeholder="e.g. Professional style, blue-gold color scheme, vertical poster layout..."></textarea>
+</div>
+
+<!-- 操作 -->
+<button class="btn-primary" id="btnStart" disabled>Start Auto Generate</button>
+<p class="help">
+  <strong>Usage:</strong><br>
+  1. Create a project, write style prompt<br>
+  2. Select PDF with <code>[illustration: description]</code> markers<br>
+  3. Click <code>Parse</code> to extract markers<br>
+  4. Keep chatgpt.com logged in<br>
+  5. Click <code>Start</code> - images download to <code>chatgpt-posters/</code><br>
+  <br>PDF marker format: <code>[illustration: your image description]</code>
+</p>
+
+<script type="module" src="popup.js"></script>
+</body>
+</html>

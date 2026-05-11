@@ -1,0 +1,27 @@
+{
+  "mode": "pdf",
+
+  "pdf": {
+    "path": "your-file.pdf",
+    "marker": "【插图：",
+    "markerEnd": "】"
+  },
+
+  "scrape": {
+    "sites": [
+      {
+        "name": "央国企就业-公开课",
+        "listUrl": "https://ylzt.xuexiao.com.cn/?control-list",
+        "enabled": true,
+        "maxPages": 6
+      }
+    ]
+  },
+
+  "globalInstruction": "你是一个专业设计师。请根据下面的要求生成一张精美的图。\n要求：\n- 风格专业大气\n- 配色协调\n- 排版清晰易读\n\n请直接生成图片。",
+
+  "chatgptUrl": "https://chatgpt.com",
+  "outputFolder": "output",
+  "waitTimeout": 180000,
+  "taskInterval": 6000
+}

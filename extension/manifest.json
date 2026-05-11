@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "ChatGPT 自动出图助手",
+  "version": "1.0",
+  "description": "PDF插图自动生成 + 网页素材批量生图，一键搞定",
+
+  "permissions": ["tabs", "downloads", "storage"],
+
+  "host_permissions": ["https://chatgpt.com/*"],
+
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "ChatGPT 自动出图"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["https://chatgpt.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "background": {
+    "service_worker": "background.js"
+  }
+}

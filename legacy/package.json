@@ -1,0 +1,14 @@
+{
+  "name": "chatgpt-haibao",
+  "version": "1.0.0",
+  "description": "ChatGPT 海报自动生成工具",
+  "scripts": {
+    "start": "node gpt-bot.js",
+    "setup": "npx playwright install chromium"
+  },
+  "dependencies": {
+    "pdf-parse": "^2.4.5",
+    "pdfjs-dist": "^5.7.284",
+    "playwright": "^1.59.1"
+  }
+}

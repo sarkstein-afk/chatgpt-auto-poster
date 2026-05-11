@@ -1,0 +1,11 @@
+node_modules/
+legacy/browser-data/
+legacy/browser-data-analyze/
+legacy/output/
+legacy/photos/
+legacy/screenshot.png
+*.pyc
+__pycache__/
+.DS_Store
+Thumbs.db
+*.log
