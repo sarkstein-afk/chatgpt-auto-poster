@@ -1,5 +1,5 @@
 // ====== Background Service Worker ======
-// 双Tab编排 + 审核重试 + 队列持久化
+// Task queue + review + persistence
 
 const STORAGE_KEY = "taskProgress";
 const DOWNLOAD_DIR = "chatgpt-posters";
@@ -13,9 +13,9 @@ let errorCount = 0;
 let taskResults = {};
 let generatorTabId = null;
 let reviewerTabId = null;
-let reviewStandardsSent = false; // 审核标准是否已发过
+let reviewStandardsSent = false;
 
-// ====== 持久化 ======
+// ====== Persist ======
 async function persistQueue() {
   const payload = {
     [STORAGE_KEY]: {
@@ -35,7 +35,7 @@ async function persistQueue() {
   await chrome.storage.local.set(payload).catch(() => {});
 }
 
-// ====== SW 启动恢复 ======
+// ====== SW restore ======
 async function restoreQueue() {
   const data = await chrome.storage.local.get(STORAGE_KEY);
   const saved = data[STORAGE_KEY];
@@ -45,40 +45,38 @@ async function restoreQueue() {
     errorCount = saved.errors || 0;
     taskResults = saved.taskResults || {};
     isRunning = false;
-    console.log(`Restored queue: ${taskQueue.length} tasks, auto-resuming`);
+    console.log("Restored: " + taskQueue.length + " tasks, resuming");
     startProcessing();
   }
 }
 restoreQueue();
 
-function sleep(ms) {
-  return new Promise(r => setTimeout(r, ms));
-}
+function sleep(ms) { return new Promise(function(r) { return setTimeout(r, ms); }); }
 
-// ====== 消息路由 ======
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+// ====== Message router ======
+chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
   switch (msg.type) {
     case "enqueueTasks": {
       if (isRunning && taskQueue.length > 0) {
-        sendResponse({ ok: false, error: "A queue is already running" });
+        sendResponse({ ok: false, error: "Queue already running" });
         break;
       }
-      // If there's a stale restored queue not running, warn and replace
       if (taskQueue.length > 0 && !isRunning) {
-        console.log(`Replacing stale restored queue (${taskQueue.length} tasks)`);
+        console.log("Replacing stale queue (" + taskQueue.length + " tasks)");
       }
-      const enableReview = msg.enableReview !== false;
-      const maxRetries = enableReview ? (msg.maxRetries ?? DEFAULT_MAX_RETRIES) : 0;
-      const passScore = msg.passScore ?? DEFAULT_PASS_SCORE;
-      const reviewPromptTemplate = msg.reviewPromptTemplate || "";
-      taskQueue = msg.tasks.map(t => ({
-        ...t,
-        _enableReview: enableReview,
-        _maxRetries: maxRetries,
-        _passScore: passScore,
-        _retries: 0,
-        _reviewTemplate: reviewPromptTemplate,
-      }));
+      var enableReview = msg.enableReview !== false;
+      var maxRetries = enableReview ? (msg.maxRetries !== undefined ? msg.maxRetries : DEFAULT_MAX_RETRIES) : 0;
+      var passScore = msg.passScore !== undefined ? msg.passScore : DEFAULT_PASS_SCORE;
+      var reviewPromptTemplate = msg.reviewPromptTemplate || "";
+      taskQueue = msg.tasks.map(function(t) {
+        return Object.assign({}, t, {
+          _enableReview: enableReview,
+          _maxRetries: maxRetries,
+          _passScore: passScore,
+          _retries: 0,
+          _reviewTemplate: reviewPromptTemplate,
+        });
+      });
       completedCount = 0;
       errorCount = 0;
       taskResults = {};
@@ -119,7 +117,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         url: msg.url,
         filename: DOWNLOAD_DIR + "/" + msg.filename,
         saveAs: false,
-      }, (downloadId) => {
+      }, function(downloadId) {
         if (chrome.runtime.lastError) {
           sendResponse({ ok: false, error: chrome.runtime.lastError.message });
         } else {
@@ -131,48 +129,42 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 });
 
-// ====== 任务引擎 ======
+// ====== Task processor ======
 async function startProcessing() {
   if (isRunning) return;
   isRunning = true;
   await persistQueue();
 
   while (taskQueue.length > 0) {
-    const task = taskQueue[0];
+    var task = taskQueue[0];
     await persistQueue();
 
-    generatorTabId = await ensureTab(generatorTabId, "generator");
-    if (!generatorTabId) { markTaskFailed(task, "Cannot open ChatGPT tab"); continue; }
+    generatorTabId = await ensureGeneratorTab();
+    if (!generatorTabId) { markTaskFailed(task, "No ChatGPT tab"); continue; }
 
-    let passed = false;
-    let currentPrompt = task.prompt;
-    const enableReview = task._enableReview !== false;
-    const maxRetries = enableReview ? (task._maxRetries || DEFAULT_MAX_RETRIES) : 0;
+    var passed = false;
+    var currentPrompt = task.prompt;
+    var enableReview = task._enableReview !== false;
+    var maxRetries = enableReview ? (task._maxRetries || DEFAULT_MAX_RETRIES) : 0;
 
-    // --- Review/retry loop ---
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    // --- Generate + review loop for ONE task ---
+    for (var attempt = 0; attempt <= maxRetries; attempt++) {
       task._retries = attempt;
       await persistQueue();
 
-      console.log(`[${task.id}] Round ${attempt + 1}/${maxRetries + 1}${enableReview ? " (review)" : ""}`);
-
       // 1. Generate
-      const genResult = await sendWithRetry(generatorTabId, {
+      var genResult = await sendWithRetry(generatorTabId, {
         type: "generate",
         prompt: currentPrompt,
         outputName: task.outputName,
-        referenceImages: task.referenceImages,
-        contextPrompt: task.contextPrompt,
-        _isFirstTask: task._isFirstTask,
       }, 2);
 
-      if (!genResult?.success) {
-        task._error = genResult?.error || "Generation failed";
-        console.log(`[${task.id}] FAIL: ${task._error}`);
+      if (!genResult || !genResult.success) {
+        task._error = (genResult && genResult.error) || "Generation failed";
         break;
       }
 
-      const imageUrl = genResult.imageUrl;
+      var imageUrl = genResult.imageUrl;
       task._lastImageUrl = imageUrl;
 
       // 2. No review? Done
@@ -182,46 +174,46 @@ async function startProcessing() {
       }
 
       // 3. Review
-      reviewerTabId = await ensureTab(reviewerTabId, "reviewer");
+      reviewerTabId = await ensureReviewerTab();
       if (!reviewerTabId) {
-        console.log(`[${task.id}] Reviewer tab unavailable, skipping review`);
+        console.log("Reviewer tab unavailable, skipping");
         passed = true;
         break;
       }
 
-      const reviewPrompt = buildReviewPrompt(task, currentPrompt);
-      const reviewResult = await sendWithRetry(reviewerTabId, {
+      var reviewPrompt = buildReviewPrompt(task, currentPrompt);
+      var reviewResult = await sendWithRetry(reviewerTabId, {
         type: "review",
         imageUrl: imageUrl,
         reviewPrompt: reviewPrompt,
       }, 2);
 
-      if (!reviewResult?.success) {
-        console.log(`[${task.id}] Review comm failed: ${reviewResult?.error}`);
+      if (!reviewResult || !reviewResult.success) {
+        console.log("Review comm failed: " + (reviewResult && reviewResult.error));
         passed = true;
         break;
       }
 
-      const score = reviewResult.score || 0;
-      const threshold = task._passScore || DEFAULT_PASS_SCORE;
+      var score = reviewResult.score || 0;
+      var threshold = task._passScore || DEFAULT_PASS_SCORE;
       task._lastScore = score;
 
       if (score >= threshold) {
-        console.log(`[${task.id}] PASS (${score} >= ${threshold})`);
+        console.log("PASS (" + score + " >= " + threshold + ")");
         passed = true;
         break;
       }
 
-      const feedback = reviewResult.fixInstructions || reviewResult.suggestions || reviewResult.feedback || "Improve quality";
-      console.log(`[${task.id}] FAIL (${score} < ${threshold}): ${feedback.slice(0, 60)}`);
+      var feedback = reviewResult.fixInstructions || reviewResult.suggestions || reviewResult.feedback || "Improve quality";
+      console.log("FAIL (" + score + " < " + threshold + ")");
 
       if (attempt < maxRetries) {
         currentPrompt = revisePrompt(currentPrompt, feedback);
-        task.outputName = task.outputName.replace(/\.png$/, `_r${attempt + 1}.png`);
+        task.outputName = task.outputName.replace(/\.png$/, "_r" + (attempt + 1) + ".png");
       }
     }
 
-    // --- Done with this task ---
+    // --- Task done ---
     if (passed) {
       completedCount++;
       taskResults[task.id] = { status: "done", retries: task._retries, score: task._lastScore };
@@ -232,7 +224,6 @@ async function startProcessing() {
 
     taskQueue.shift();
     await persistQueue();
-
     if (taskQueue.length > 0) await sleep(5000);
   }
 
@@ -241,89 +232,117 @@ async function startProcessing() {
   console.log("All tasks complete");
 }
 
-// ====== Review prompt builder ======
+// ====== Review prompt ======
 function buildReviewPrompt(task, generationPrompt) {
-  const template = task._reviewTemplate;
+  var template = task._reviewTemplate;
   if (template) {
     return template
       .replace(/\{requirements\}/g, task._originalRequirements || generationPrompt)
       .replace(/\{prompt\}/g, generationPrompt);
   }
 
-  const threshold = task._passScore || DEFAULT_PASS_SCORE;
+  var threshold = task._passScore || DEFAULT_PASS_SCORE;
+  var reqs = (task._originalRequirements || generationPrompt);
 
-  // 第一次发完整标准，后续发精简版（省 token）
   if (!reviewStandardsSent) {
     reviewStandardsSent = true;
-    return `You are a strict professional image reviewer. Examine this generated image against the requirements below.
-
-[Original Requirements]
-${task._originalRequirements || generationPrompt}
-
-[Scoring - 100 points]
-1. Content accuracy (40pts): Every element matches description? Extra/missing objects?
-2. Style consistency (25pts): Color, lighting, composition match?
-3. Technical quality (20pts): Sharp, clean, well-composed?
-4. AI defects (15pts): Deformed limbs? Garbled text? Unnatural seams? Bad anatomy?
-
-Reply JSON only:
-{"score":<0-100>,"passed":<score>=${threshold}>,"issues":["problem1","problem2"],"verdict":"summary","fixInstructions":"EXACTLY what to change and how - be specific about which element, what's wrong, how to fix"}`
+    return [
+      "You are a strict professional image reviewer. Examine this generated image against the requirements below.",
+      "",
+      "[Original Requirements]",
+      reqs,
+      "",
+      "[Scoring - 100 points]",
+      "1. Content accuracy (40pts): Every element matches description? Extra/missing objects?",
+      "2. Style consistency (25pts): Color, lighting, composition match?",
+      "3. Technical quality (20pts): Sharp, clean, well-composed?",
+      "4. AI defects (15pts): Deformed limbs? Garbled text? Unnatural seams? Bad anatomy?",
+      "",
+      "Reply JSON only:",
+      '{"score":<0-100>,"passed":<score>=' + threshold + '>,"issues":["problem1","problem2"],"verdict":"summary","fixInstructions":"EXACTLY what to change - be specific: which element, what is wrong, how to fix it"}'
+    ].join("\n");
   }
 
-  // 精简版
-  return `Review this image. Same criteria as before. Original requirements: ${(task._originalRequirements || generationPrompt).slice(0, 200)}
-
-JSON only: {"score":<0-100>,"passed":<score>=${threshold}>,"issues":["..."],"verdict":"...","fixInstructions":"specific fixes if score<${threshold}"}`;
+  return [
+    "Review this image (same criteria as before).",
+    "Original requirements: " + reqs.slice(0, 200),
+    "",
+    'JSON: {"score":<0-100>,"passed":<score>=' + threshold + '>,"issues":["..."],"verdict":"...","fixInstructions":"specific fixes if score<' + threshold + '"}'
+  ].join("\n");
 }
 
-// ====== Prompt revision ======
+// ====== Revise prompt ======
 function revisePrompt(originalPrompt, feedback) {
-  return `${originalPrompt}
-
-[CRITICAL FIXES REQUIRED]
-The previous image failed review. You MUST fix these specific problems:
-
-${feedback}
-
-IMPORTANT: Do NOT just re-generate the same thing. Address EACH issue listed above explicitly.`;
-
-You MUST address all of the above problems.`;
+  return [
+    originalPrompt,
+    "",
+    "[CRITICAL FIXES REQUIRED]",
+    "The previous image failed review. You MUST fix these specific problems:",
+    feedback,
+    "",
+    "IMPORTANT: Do NOT just re-generate the same thing. Address EACH issue listed above explicitly."
+  ].join("\n");
 }
 
 // ====== Fail fast ======
 function markTaskFailed(task, error) {
   errorCount++;
-  taskResults[task.id] = { status: "error", error };
+  taskResults[task.id] = { status: "error", error: error };
   task._error = error;
   taskQueue.shift();
   persistQueue();
 }
 
 // ====== Tab management ======
-async function ensureTab(existingTabId, label) {
-  if (existingTabId) {
-    try { await chrome.tabs.get(existingTabId); return existingTabId; } catch {}
+async function ensureGeneratorTab() {
+  if (generatorTabId) {
+    try { await chrome.tabs.get(generatorTabId); return generatorTabId; } catch(e) {}
   }
-  const [tab] = await chrome.tabs.query({ url: ["https://chatgpt.com/*", "https://chat.openai.com/*"] });
-  if (tab) {
-    try { await chrome.tabs.get(tab.id); return tab.id; } catch {}
+  var tabs = await chrome.tabs.query({ url: ["https://chatgpt.com/*", "https://chat.openai.com/*"] });
+  if (tabs.length > 0) {
+    generatorTabId = tabs[0].id;
+    return tabs[0].id;
   }
-  const newTab = await chrome.tabs.create({ url: "https://chatgpt.com/", active: false });
+  var newTab = await chrome.tabs.create({ url: "https://chatgpt.com/", active: false });
   await waitForTabLoad(newTab.id);
   await sleep(3000);
-  console.log(`New ${label} tab: ${newTab.id}`);
+  generatorTabId = newTab.id;
+  return newTab.id;
+}
+
+async function ensureReviewerTab() {
+  if (reviewerTabId) {
+    try { await chrome.tabs.get(reviewerTabId); return reviewerTabId; } catch(e) {}
+  }
+  // Find a ChatGPT tab that is NOT the generator tab
+  var tabs = await chrome.tabs.query({ url: ["https://chatgpt.com/*", "https://chat.openai.com/*"] });
+  var reviewTab = null;
+  for (var i = 0; i < tabs.length; i++) {
+    if (tabs[i].id !== generatorTabId) {
+      reviewTab = tabs[i];
+      break;
+    }
+  }
+  if (reviewTab) {
+    reviewerTabId = reviewTab.id;
+    return reviewTab.id;
+  }
+  // Open a new tab
+  var newTab = await chrome.tabs.create({ url: "https://chatgpt.com/", active: false });
+  await waitForTabLoad(newTab.id);
+  await sleep(3000);
+  reviewerTabId = newTab.id;
   return newTab.id;
 }
 
 // ====== Retry send ======
 async function sendWithRetry(tabId, msg, maxRetries) {
-  for (let i = 0; i < maxRetries; i++) {
+  for (var i = 0; i < maxRetries; i++) {
     try {
-      const result = await chrome.tabs.sendMessage(tabId, msg);
+      var result = await chrome.tabs.sendMessage(tabId, msg);
       if (result) return result;
-      console.log(`  No response ${i + 1}/${maxRetries}`);
     } catch (e) {
-      console.log(`  Retry ${i + 1}/${maxRetries}: ${e.message}`);
+      console.log("  Retry " + (i + 1) + "/" + maxRetries + ": " + e.message);
     }
     if (i < maxRetries - 1) await sleep(3000);
   }
@@ -332,8 +351,8 @@ async function sendWithRetry(tabId, msg, maxRetries) {
 
 // ====== Tab load waiter ======
 function waitForTabLoad(tabId) {
-  return new Promise((resolve) => {
-    const timeout = setTimeout(() => resolve(), 15000);
+  return new Promise(function(resolve) {
+    var timeout = setTimeout(function() { resolve(); }, 15000);
     chrome.tabs.onUpdated.addListener(function listener(tid, info) {
       if (tid === tabId && info.status === "complete") {
         clearTimeout(timeout);

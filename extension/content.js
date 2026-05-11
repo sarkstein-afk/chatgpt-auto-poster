@@ -7,7 +7,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === "generate") {
-    doGenerate(msg.prompt, msg.outputName, msg.referenceImages, msg.contextPrompt, msg._isFirstTask).then(sendResponse);
+    doGenerate(msg.prompt, msg.outputName).then(sendResponse);
     return true;
   }
 
@@ -361,85 +361,62 @@ function normalizeScore(result) {
 }
 
 // ==================== 核心：生成一张图 ====================
-// referenceImages = [{ dataUrl, label }, ...]  带标签的参考图
-// contextPrompt = 发给GPT的上下文说明（仅第一个任务）
-// _isFirstTask = 是否第一个任务（需新建对话+上传素材）
-async function doGenerate(prompt, outputName, referenceImages, contextPrompt, _isFirstTask) {
-  const refs = referenceImages || [];
-  console.log(`🎨 [生图] ${outputName}${_isFirstTask ? ` [首任务+${refs.length}张素材]` : ""}`);
+async function doGenerate(prompt, outputName) {
+  console.log("[Generate] " + outputName);
 
   try {
-    // 第一个任务：新开对话
-    if (_isFirstTask) {
-      const newChatBtn =
-        document.querySelector('a[href="/"]') ||
-        document.querySelector('[data-testid="new-chat"]') ||
-        document.querySelector('button[aria-label*="New chat"], button[aria-label*="new chat"]');
-      if (newChatBtn) { newChatBtn.click(); await sleep(2000); }
-    }
+    // 新开对话
+    var newChatBtn =
+      document.querySelector('a[href="/"]') ||
+      document.querySelector('[data-testid="new-chat"]') ||
+      document.querySelector('button[aria-label*="New chat"], button[aria-label*="new chat"]');
+    if (newChatBtn) { newChatBtn.click(); await sleep(2500); }
 
-    const inputBox = await waitForInput();
-    if (!inputBox) return { success: false, error: "找不到输入框" };
+    var inputBox = await waitForInput();
+    if (!inputBox) return { success: false, error: "Input box not found" };
 
-    // 上传参考图（有标签的素材图）
-    if (refs.length > 0) {
-      for (const ref of refs) {
-        const uploaded = await uploadImage(ref.dataUrl || ref); // 兼容纯URL和新格式
-        if (uploaded) {
-          await waitForUploadComplete();
-          await sleep(rand(300, 800));
-        }
-      }
-      console.log(`  📎 ${refs.length} 张参考图已上传`);
-    }
+    await sleep(rand(300, 1200));
+    await humanType(inputBox, prompt);
+    await sleep(rand(400, 1500));
 
-    // 构建消息文本（参考图标签 + 上下文 + 生图 prompt，一句话发送）
-    await sleep(rand(200, 600));
-    let fullText = "";
-
-    if (contextPrompt) {
-      // 第一个任务：先发上下文说明
-      fullText = contextPrompt + "\n\n现在请生成第一张图：\n" + prompt;
-    } else {
-      fullText = prompt;
-    }
-
-    await humanType(inputBox, fullText);
-    await sleep(rand(300, 1000));
-
-    // 发送（只发一次）
-    const sendBtn = findSendBtn();
+    var sendBtn = findSendBtn();
     if (sendBtn) { await humanClick(sendBtn); }
     else {
       await sleep(rand(50, 200));
-      inputBox.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+      inputBox.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true,
+      }));
     }
 
-    console.log(`  🚀 已发送`);
-    const ok = await waitForImage();
-    if (!ok) console.log(`  ⚠ 生成超时，兜底查找`);
+    console.log("  Sent");
+    var ok = await waitForImage();
+    if (!ok) console.log("  Timeout, trying fallback");
 
     await sleep(jitter(2000, 0.5));
 
-    // 找图片 URL
-    const patterns = ["oaidalleapi", "files.oaiusercontent.com", "dall-e"];
-    const allImgs = Array.from(document.querySelectorAll("img"));
-    const dalleImgs = allImgs.filter(i => patterns.some(p => (i.src || "").includes(p)));
-    const bigImgs = allImgs.filter(i => i.naturalWidth > 300 && i.naturalHeight > 300 && i.src.startsWith("https://"));
-    const allUrls = [...new Set([...dalleImgs, ...bigImgs].map(i => i.src))];
-    const imgUrl = allUrls[allUrls.length - 1];
+    // Find image URL
+    var patterns = ["oaidalleapi", "files.oaiusercontent.com", "dall-e"];
+    var allImgs = Array.from(document.querySelectorAll("img"));
+    var dalleImgs = allImgs.filter(function(i) { return patterns.some(function(p) { return (i.src || "").indexOf(p) !== -1; }); });
+    var bigImgs = allImgs.filter(function(i) { return i.naturalWidth > 300 && i.naturalHeight > 300 && i.src.indexOf("https://") === 0; });
+    var allUrls = [];
+    var seen = {};
+    [].concat(dalleImgs, bigImgs).forEach(function(i) {
+      if (!seen[i.src]) { seen[i.src] = true; allUrls.push(i.src); }
+    });
+    var imgUrl = allUrls[allUrls.length - 1];
 
-    if (!imgUrl) return { success: false, error: "没找到生成的图片" };
+    if (!imgUrl) return { success: false, error: "No image found" };
 
     try {
       await chrome.runtime.sendMessage({ type: "download", url: imgUrl, filename: outputName });
-    } catch {}
+    } catch(e) {}
 
-    console.log(`  ✅ 完成: ${outputName}`);
+    console.log("  Done: " + outputName);
     return { success: true, imageUrl: imgUrl };
 
   } catch (e) {
-    console.error(`  ❌ ${e.message}`);
+    console.error("  Error: " + e.message);
     return { success: false, error: e.message };
   }
 }

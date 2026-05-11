@@ -165,26 +165,33 @@ btnScanProjects.addEventListener("click", async () => {
 let foundFilesCache = [];
 
 async function refreshFileList(files) {
+  const oldCache = foundFilesCache;
   foundFilesCache = files || [];
   if (!files) {
     if (!rootDirHandle) return;
     foundFilesCache = await scanAllProjectFiles(rootDirHandle);
   }
 
+  // 保留旧的 _isTemplate 标记
+  for (const f of foundFilesCache) {
+    const old = oldCache.find(o => o.name === f.name && o.project === f.project);
+    if (old && old._isTemplate) f._isTemplate = true;
+  }
+
   // 筛选当前项目下的文件
   const myFiles = foundFilesCache.filter(f => f.project === activeProject || f.project === "root");
 
-  // 填充下拉框
+  // 填充下拉框（用 project/name 做唯一标识）
   fileSelect.innerHTML = '<option value="">-- 选择文件（自动解析）--</option>';
   for (const f of foundFilesCache) {
+    const key = `${f.project}/${f.name}`;
     const label = f.project !== "root" ? `[${f.project}] ${f.name}` : f.name;
-    fileSelect.innerHTML += `<option value="${f.name}" data-project="${f.project}">${label}</option>`;
+    fileSelect.innerHTML += `<option value="${key}">${label}</option>`;
   }
 
   if (myFiles.length > 0) {
-    // 自动选第一个并解析
     const first = myFiles[0];
-    fileSelect.value = first.name;
+    fileSelect.value = `${first.project}/${first.name}`;
     await loadFileFromCache(first);
   }
 }
@@ -203,18 +210,26 @@ async function loadFileFromCache(f) {
 
 // 下拉框选文件 → 自动解析
 fileSelect.addEventListener("change", async () => {
-  const selName = fileSelect.value;
-  if (!selName) return;
-  const f = foundFilesCache.find(x => x.name === selName);
+  const key = fileSelect.value;
+  if (!key) return;
+  const [proj, ...nameParts] = key.split("/");
+  const fname = nameParts.join("/");
+  const f = foundFilesCache.find(x => x.name === fname && x.project === proj);
   if (f && f.handle) {
+    // 恢复模板勾选状态
+    isTemplate.checked = !!f._isTemplate;
+    updateFileRoleHint();
     await loadFileFromCache(f);
   }
 });
 
 // 模板复选框变更
 isTemplate.addEventListener("change", () => {
-  const selName = fileSelect.value;
-  const f = foundFilesCache.find(x => x.name === selName);
+  const key = fileSelect.value;
+  if (!key) return;
+  const [proj, ...nameParts] = key.split("/");
+  const fname = nameParts.join("/");
+  const f = foundFilesCache.find(x => x.name === fname && x.project === proj);
   if (f) f._isTemplate = isTemplate.checked;
   updateFileRoleHint();
 });
@@ -672,55 +687,17 @@ btnStart.addEventListener("click", async () => {
   const threshold = parseInt(passScore.value) || 80;
   const reviewTmpl = reviewPromptTemplate.value.trim();
 
-  // 渲染所有素材页面为图片（模板 + 当前文件）
-  progressText.textContent = "正在转化素材为图片...";
-  const contextImages = []; // [{ dataUrl, label }]
-  const templateFiles = foundFilesCache.filter(f => f._isTemplate);
-  const materialFiles = foundFilesCache.filter(f => !f._isTemplate);
-
-  // 1. 模板文件 → 全部页面渲染
-  for (const tf of templateFiles) {
-    const ext = tf.name.split(".").pop().toLowerCase();
-    if (ext === "pdf") {
-      const fileObj = await tf.handle.getFile();
-      const buf = await fileObj.arrayBuffer();
-      const tpdf = await pdfjsLib.getDocument({ data: buf }).promise;
-      for (let p = 1; p <= tpdf.numPages; p++) {
-        const thumb = await renderPDFPageGeneric(tpdf, p);
-        if (thumb) contextImages.push({ dataUrl: thumb, label: `[风格模板] ${tf.name} 第${p}页` });
-      }
-    }
-  }
-  // 2. 当前解析文件的所有页面
-  if (pdfDoc) {
-    for (const r of imageRequests) {
-      const thumb = await renderPDFPageGeneric(pdfDoc, r.page);
-      if (thumb) contextImages.push({ dataUrl: thumb, label: `[素材参考] 第${r.page}页` });
-    }
-  }
-  // 3. 用户手动选的参考图
-  for (const dataUrl of referenceImages) {
-    contextImages.push({ dataUrl, label: "[参考图]" });
-  }
-
-  // 构建上下文 Prompt
-  const templateNames = templateFiles.map(f => f.name).join("、") || "无";
-  const contextPrompt = contextImages.length > 0
-    ? `以下是本项目的全部参考素材：\n\n⭐ 风格模板（${templateNames}）- 所有生成的图片必须严格匹配模板的配色、版式、字体风格。\n📎 素材参考 - 这些是内容参考和页面上下文。\n\n请记住以上所有素材。接下来我会逐条发送生图需求，每张图都必须基于上述模板风格来生成。`
-    : "";
-
-  // 第一个任务带全部素材，后续任务只带 prompt
-  const tasks = imageRequests.map((r, i) => ({
-    id: `P${r.page}_${r.index}`,
-    prompt: `${instruction}\n\n具体需求：${r.description}\n\n重要规则：画面中的文字必须清晰可读，不能出现乱码、扭曲、拼写错误或无法辨认的字符。`,
-    _originalRequirements: `${instruction}\n\n具体需求：${r.description}`,
-    outputName: `P${r.page}_${r.index}_${r.description.replace(/[\\/:*?"<>|]/g, "_").slice(0, 40)}.png`,
-    page: r.page,
-    index: r.index,
-    _isFirstTask: i === 0,
-    referenceImages: i === 0 && contextImages.length > 0 ? contextImages : undefined,
-    contextPrompt: i === 0 ? contextPrompt : undefined,
-  }));
+  // Build tasks: one per marker/page, each independent
+  var tasks = imageRequests.map(function(r) {
+    return {
+      id: "P" + r.page + "_" + r.index,
+      prompt: instruction + "\n\n具体要求：" + r.description + "\n\n重要规则：画面中的文字必须清晰可读，不能出现乱码、扭曲、拼写错误或无法辨认的字符。",
+      _originalRequirements: instruction + "\n\n具体要求：" + r.description,
+      outputName: "P" + r.page + "_" + r.index + "_" + r.description.replace(/[\\/:*?"<>|]/g, "_").slice(0, 40) + ".png",
+      page: r.page,
+      index: r.index,
+    };
+  });
 
   const enqueueResp = await chrome.runtime.sendMessage({
     type: "enqueueTasks",
