@@ -53,14 +53,22 @@ async function humanScroll() {
 
 // ==================== 元素查找 ====================
 function findInput() {
-  const prose = document.querySelector('.ProseMirror[contenteditable="true"]');
-  if (prose && prose.offsetParent !== null) return prose;
-  const ta = document.querySelector("#prompt-textarea");
+  // 聊天页面底部输入框，排除侧边栏和弹窗里的
+  var editors = Array.from(document.querySelectorAll('.ProseMirror[contenteditable="true"]'));
+  // 优先找在 form 或 chat 容器里的，且在页面底部
+  var chatEditors = editors.filter(function(e) {
+    var rect = e.getBoundingClientRect();
+    return rect.top > window.innerHeight * 0.3 && rect.width > 300;
+  });
+  if (chatEditors.length > 0) return chatEditors[chatEditors.length - 1];
+
+  // 退而求其次找可见的
+  var visible = editors.filter(function(e) { return e.offsetParent !== null; });
+  if (visible.length > 0) return visible[visible.length - 1];
+
+  var ta = document.querySelector("#prompt-textarea");
   if (ta && ta.offsetParent !== null) return ta;
-  const ce = document.querySelector('div[contenteditable="true"]');
-  if (ce && ce.offsetParent !== null) return ce;
-  const any = document.querySelector("textarea");
-  if (any && any.offsetParent !== null) return any;
+
   return null;
 }
 
