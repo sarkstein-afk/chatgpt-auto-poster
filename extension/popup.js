@@ -32,7 +32,7 @@ let projects = {};
 let activeProject = "default";
 
 const DEFAULT_PROJECT = {
-  name: "Default",
+  name: "默认项目",
   globalInstruction: "",
   enableReview: true,
   passScore: 80,
@@ -40,14 +40,13 @@ const DEFAULT_PROJECT = {
   reviewPromptTemplate: "",
 };
 
-// ====== Project management ======
+// ====== 项目管理 ======
 async function loadProjects() {
   const data = await chrome.storage.local.get(["projects", "activeProject"]);
   projects = data.projects || { default: { ...DEFAULT_PROJECT } };
   if (!projects["default"]) projects["default"] = { ...DEFAULT_PROJECT };
   activeProject = data.activeProject || "default";
   if (!projects[activeProject]) activeProject = "default";
-
   renderProjectList();
   loadActiveProject();
 }
@@ -81,13 +80,12 @@ function saveActiveProject() {
   chrome.storage.local.set({ projects, activeProject });
 }
 
-// ====== Project events ======
+// ====== 项目事件 ======
 projectSelect.addEventListener("change", () => {
   saveActiveProject();
   activeProject = projectSelect.value;
   loadActiveProject();
   chrome.storage.local.set({ activeProject });
-  // Reset parsed state
   imageRequests = [];
   resultSection.style.display = "none";
   btnStart.disabled = true;
@@ -97,10 +95,10 @@ projectSelect.addEventListener("change", () => {
 });
 
 btnNewProject.addEventListener("click", () => {
-  const name = prompt("Project name:");
+  const name = prompt("请输入项目名称：");
   if (!name || !name.trim()) return;
-  const id = name.trim().toLowerCase().replace(/\s+/g, "_");
-  if (projects[id]) { alert("Project already exists"); return; }
+  const id = name.trim().replace(/\s+/g, "_");
+  if (projects[id]) { alert("项目已存在"); return; }
   saveActiveProject();
   projects[id] = { ...DEFAULT_PROJECT, name: name.trim() };
   activeProject = id;
@@ -116,8 +114,8 @@ btnNewProject.addEventListener("click", () => {
 });
 
 btnDelProject.addEventListener("click", () => {
-  if (activeProject === "default") { alert("Cannot delete default project"); return; }
-  if (!confirm(`Delete project "${projects[activeProject]?.name}"?`)) return;
+  if (activeProject === "default") { alert("不能删除默认项目"); return; }
+  if (!confirm(`确定删除项目「${projects[activeProject]?.name}」？`)) return;
   delete projects[activeProject];
   activeProject = "default";
   chrome.storage.local.set({ projects, activeProject });
@@ -131,104 +129,259 @@ btnDelProject.addEventListener("click", () => {
   updateProgress();
 });
 
-// Auto-save on any setting change
+// 设置变更自动保存
 [globalInstruction, enableReview, maxRetries, passScore, reviewPromptTemplate].forEach(el =>
   el.addEventListener("change", saveActiveProject)
 );
 
-// ====== ChatGPT connection check ======
+// ====== ChatGPT 连接检查 ======
 async function checkChatGPT() {
   try {
     const tabs = await chrome.tabs.query({ url: "https://chatgpt.com/*" });
     if (tabs.length > 0) {
       const resp = await chrome.tabs.sendMessage(tabs[0].id, { type: "ping" });
       if (resp?.ok) {
-        gptStatusEl.textContent = `Connected (${tabs.length} tabs)`;
+        gptStatusEl.textContent = `✅ 已连接 (${tabs.length}个标签页)`;
         gptStatusEl.className = "status status-ok";
         return tabs[0].id;
       }
     }
-    gptStatusEl.textContent = "Open chatgpt.com first";
+    gptStatusEl.textContent = "⚠ 请先打开 chatgpt.com 并登录";
     gptStatusEl.className = "status status-warn";
     return null;
   } catch {
-    gptStatusEl.textContent = "Not connected";
+    gptStatusEl.textContent = "❌ 未连接";
     gptStatusEl.className = "status status-err";
     return null;
   }
 }
 
-// ====== PDF parsing (auto + manual) ======
-async function parsePDF() {
+// ====== 提取标记文本 ======
+function extractMarkers(pageText, pageNum, startIdx) {
+  const results = [];
+  let searchFrom = startIdx || 0;
+
+  while (true) {
+    let matchIdx = -1, prefixLen = 0, endChar = "";
+    for (const [prefix, len] of [["[illustration:", 13], ["【插图：", 5], ["【插图:", 5]]) {
+      const idx = pageText.indexOf(prefix, searchFrom);
+      if (idx !== -1 && (matchIdx === -1 || idx < matchIdx)) {
+        matchIdx = idx; prefixLen = len;
+        endChar = prefix[0] === "[" ? "]" : "】";
+      }
+    }
+    if (matchIdx === -1) break;
+
+    const endIdx = pageText.indexOf(endChar, matchIdx + prefixLen);
+    let desc;
+    if (endIdx === -1) {
+      desc = pageText.slice(matchIdx + prefixLen, matchIdx + prefixLen + 100).trim();
+      searchFrom = matchIdx + prefixLen;
+    } else {
+      desc = pageText.slice(matchIdx + prefixLen, endIdx).trim();
+      searchFrom = endIdx + 1;
+    }
+    if (desc && desc.length > 2) {
+      results.push({ page: pageNum, description: desc });
+    }
+  }
+  return results;
+}
+
+// ====== PDF 解析 ======
+async function parsePDF(file) {
+  await pdfjsReady;
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const markers = [];
+
+  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+    const page = await pdf.getPage(pageNum);
+    const textContent = await page.getTextContent();
+    const pageText = textContent.items.map(item => item.str).join("");
+    markers.push(...extractMarkers(pageText, pageNum));
+  }
+
+  return { markers, extra: `${pdf.numPages} 页` };
+}
+
+// ====== PPTX 解析 ======
+async function parsePPTX(file) {
+  const arrayBuffer = await file.arrayBuffer();
+  const zip = await JSZip.loadAsync(arrayBuffer);
+  const markers = [];
+
+  // 获取所有 slide 文件，排序
+  const slideFiles = Object.keys(zip.files)
+    .filter(name => /^ppt\/slides\/slide\d+\.xml$/.test(name))
+    .sort((a, b) => {
+      const na = parseInt(a.match(/slide(\d+)\.xml/)[1]);
+      const nb = parseInt(b.match(/slide(\d+)\.xml/)[1]);
+      return na - nb;
+    });
+
+  let slideNum = 0;
+  for (const slidePath of slideFiles) {
+    slideNum++;
+    const xmlText = await zip.files[slidePath].async("string");
+    // 提取所有 <a:t> 标签中的文本
+    const texts = [];
+    const regex = /<a:t[^>]*>([^<]*)<\/a:t>/g;
+    let match;
+    while ((match = regex.exec(xmlText)) !== null) {
+      if (match[1]) texts.push(match[1]);
+    }
+    const slideText = texts.join("");
+    markers.push(...extractMarkers(slideText, slideNum));
+  }
+
+  return { markers, extra: `${slideNum} 张幻灯片` };
+}
+
+// ====== DOCX 解析 ======
+async function parseDOCX(file) {
+  const arrayBuffer = await file.arrayBuffer();
+  const zip = await JSZip.loadAsync(arrayBuffer);
+  const xmlText = await zip.files["word/document.xml"].async("string");
+  const texts = [];
+  const regex = /<w:t[^>]*>([^<]*)<\/w:t>/g;
+  let match;
+  while ((match = regex.exec(xmlText)) !== null) {
+    if (match[1]) texts.push(match[1]);
+  }
+  const fullText = texts.join("");
+  const markers = extractMarkers(fullText, 1);
+  return { markers, extra: `${texts.length} 个文本片段` };
+}
+
+// ====== XLSX 解析 ======
+async function parseXLSX(file) {
+  const arrayBuffer = await file.arrayBuffer();
+  const zip = await JSZip.loadAsync(arrayBuffer);
+
+  // 先读共享字符串表
+  let sharedStrings = [];
+  if (zip.files["xl/sharedStrings.xml"]) {
+    const ssXml = await zip.files["xl/sharedStrings.xml"].async("string");
+    const regex = /<si[^>]*>[\s\S]*?<t[^>]*>([^<]*)<\/t>[\s\S]*?<\/si>/g;
+    let match;
+    while ((match = regex.exec(ssXml)) !== null) {
+      sharedStrings.push(match[1]);
+    }
+    // 简化版：直接提取所有 <t> 标签
+    if (sharedStrings.length === 0) {
+      const tRegex = /<t[^>]*>([^<]+)<\/t>/g;
+      let tm;
+      while ((tm = tRegex.exec(ssXml)) !== null) {
+        sharedStrings.push(tm[1]);
+      }
+    }
+  }
+
+  // 读取所有 sheet
+  const sheetFiles = Object.keys(zip.files)
+    .filter(name => /^xl\/worksheets\/sheet\d+\.xml$/.test(name))
+    .sort();
+
+  let allTexts = [];
+  for (const sheetPath of sheetFiles) {
+    const sheetXml = await zip.files[sheetPath].async("string");
+    // 提取共享字符串引用
+    const cellRegex = /<c[^>]*t="s"[^>]*>[\s\S]*?<v>(\d+)<\/v>[\s\S]*?<\/c>/g;
+    let cm;
+    while ((cm = cellRegex.exec(sheetXml)) !== null) {
+      const idx = parseInt(cm[1]);
+      if (sharedStrings[idx]) allTexts.push(sharedStrings[idx]);
+    }
+    // 也提取内联字符串
+    const inlineRegex = /<t[^>]*>([^<]+)<\/t>/g;
+    let im;
+    while ((im = inlineRegex.exec(sheetXml)) !== null) {
+      if (im[1] && isNaN(im[1])) allTexts.push(im[1]);
+    }
+  }
+
+  const fullText = allTexts.join(" ");
+  const markers = extractMarkers(fullText, 1);
+  return { markers, extra: `${sheetFiles.length} 个工作表` };
+}
+
+// ====== TXT 解析 ======
+async function parseTXT(file) {
+  const text = await file.text();
+  const markers = extractMarkers(text, 1);
+  return { markers, extra: `${text.length} 字符` };
+}
+
+// ====== 统一解析入口 ======
+async function parseFile() {
   const file = pdfFileInput.files[0];
   if (!file) {
-    pdfStatusEl.innerHTML = "<span class='status status-err'>Select a PDF file</span>";
+    pdfStatusEl.innerHTML = "<span class='status status-err'>请先选择文件</span>";
     return;
   }
-  pdfStatusEl.innerHTML = "<span class='status status-warn'>Parsing...</span>";
+
+  pdfStatusEl.innerHTML = "<span class='status status-warn'>⏳ 解析中...</span>";
   imageRequests = [];
 
   try {
-    await pdfjsReady;
-    const arrayBuffer = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-    let globalIdx = 0;
+    const ext = file.name.split(".").pop().toLowerCase();
+    let result;
 
-    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-      const page = await pdf.getPage(pageNum);
-      const textContent = await page.getTextContent();
-      const pageText = textContent.items.map(item => item.str).join("");
-      let searchFrom = 0;
-
-      while (true) {
-        let startIdx = -1, prefixLen = 0, endChar = "";
-        for (const [prefix, len] of [["[illustration:", 13], ["【插图：", 5], ["【插图:", 5]]) {
-          const idx = pageText.indexOf(prefix, searchFrom);
-          if (idx !== -1 && (startIdx === -1 || idx < startIdx)) {
-            startIdx = idx; prefixLen = len;
-            endChar = prefix[0] === "[" ? "]" : "】";
-          }
-        }
-        if (startIdx === -1) break;
-
-        const endIdx = pageText.indexOf(endChar, startIdx + prefixLen);
-        let desc;
-        if (endIdx === -1) {
-          desc = pageText.slice(startIdx + prefixLen, startIdx + prefixLen + 100).trim();
-          searchFrom = startIdx + prefixLen;
-        } else {
-          desc = pageText.slice(startIdx + prefixLen, endIdx).trim();
-          searchFrom = endIdx + 1;
-        }
-        if (desc && desc.length > 2) {
-          globalIdx++;
-          imageRequests.push({ index: globalIdx, page: pageNum, description: desc });
-        }
-      }
+    if (ext === "pdf") {
+      result = await parsePDF(file);
+    } else if (ext === "pptx") {
+      result = await parsePPTX(file);
+    } else if (ext === "ppt") {
+      pdfStatusEl.innerHTML = "<span class='status status-warn'>⚠ 旧版 .ppt 不支持，请另存为 .pptx</span>";
+      return;
+    } else if (ext === "docx") {
+      result = await parseDOCX(file);
+    } else if (ext === "doc") {
+      pdfStatusEl.innerHTML = "<span class='status status-warn'>⚠ 旧版 .doc 不支持，请另存为 .docx</span>";
+      return;
+    } else if (ext === "xlsx") {
+      result = await parseXLSX(file);
+    } else if (ext === "xls") {
+      pdfStatusEl.innerHTML = "<span class='status status-warn'>⚠ 旧版 .xls 不支持，请另存为 .xlsx</span>";
+      return;
+    } else if (ext === "txt" || ext === "md" || ext === "csv") {
+      result = await parseTXT(file);
+    } else {
+      pdfStatusEl.innerHTML = "<span class='status status-err'>不支持的格式，支持：PDF / PPTX / DOCX / XLSX / TXT</span>";
+      return;
     }
 
-    if (imageRequests.length === 0) {
-      pdfStatusEl.innerHTML = "<span class='status status-warn'>No markers found</span>";
+    const { markers, extra } = result;
+
+    if (markers.length === 0) {
+      pdfStatusEl.innerHTML = `<span class='status status-warn'>⚠ 未找到【插图：xxx】标记（${extra}）</span>`;
       resultSection.style.display = "none";
       btnStart.disabled = true;
       return;
     }
 
-    pdfStatusEl.innerHTML = `<span class='status status-ok'>Parsed: ${pdf.numPages} pages, ${imageRequests.length} markers</span>`;
+    // 分配全局序号
+    imageRequests = markers.map((m, i) => ({
+      index: i + 1,
+      page: m.page,
+      description: m.description,
+    }));
+
+    pdfStatusEl.innerHTML = `<span class='status status-ok'>✅ 解析完成：${extra}，找到 ${imageRequests.length} 个插图标记</span>`;
     resultSection.style.display = "block";
     btnStart.disabled = false;
     renderTaskList();
   } catch (e) {
-    pdfStatusEl.innerHTML = `<span class='status status-err'>Parse error: ${e.message}</span>`;
+    pdfStatusEl.innerHTML = `<span class='status status-err'>❌ 解析失败: ${e.message}</span>`;
   }
 }
 
-// Auto-parse when file selected
-pdfFileInput.addEventListener("change", parsePDF);
-// Also manual parse button
-btnParse.addEventListener("click", parsePDF);
+// 自动解析（选文件即解析）
+pdfFileInput.addEventListener("change", parseFile);
+btnParse.addEventListener("click", parseFile);
 
-// ====== Rendering ======
+// ====== 任务列表渲染 ======
 function renderTaskList() {
   taskListEl.innerHTML = imageRequests.map((r, i) => `
     <div class="task-item" id="task-${i}">
@@ -245,7 +398,7 @@ function updateProgress() {
   const total = imageRequests.length;
   const pct = total > 0 ? Math.round(((done + err) / total) * 100) : 0;
   progressBar.style.width = pct + "%";
-  progressText.textContent = `${done + err}/${total} (${done} ok, ${err} fail)`;
+  progressText.textContent = `${done + err}/${total}（${done}✅ ${err}❌）`;
 }
 
 function markTaskDone(idx, info = "") {
@@ -253,7 +406,7 @@ function markTaskDone(idx, info = "") {
   const el = document.getElementById(`task-${idx}`);
   if (el) {
     el.classList.add("done");
-    el.querySelector(".num").textContent = "OK";
+    el.querySelector(".num").textContent = "✅";
     if (info) el.querySelector(".info").textContent += ` [${info}]`;
   }
   updateProgress();
@@ -264,7 +417,7 @@ function markTaskError(idx, msg) {
   const el = document.getElementById(`task-${idx}`);
   if (el) {
     el.style.background = "#3a1a1a";
-    el.querySelector(".num").textContent = "ERR";
+    el.querySelector(".num").textContent = "❌";
     el.querySelector(".info").textContent += ` [${msg}]`;
   }
   updateProgress();
@@ -274,27 +427,26 @@ function markTaskRetrying(idx, attempt) {
   const el = document.getElementById(`task-${idx}`);
   if (el) {
     el.style.background = "#3a3a1a";
-    el.querySelector(".num").textContent = "R" + attempt;
-    el.querySelector(".info").textContent = el.querySelector(".info").textContent.replace(/ \[R\d+\]/, "") + ` [R${attempt}]`;
+    el.querySelector(".num").textContent = "🔄";
+    el.querySelector(".info").textContent = el.querySelector(".info").textContent.replace(/ \[重试\d+\]/, "") + ` [重试${attempt}]`;
   }
 }
 
-// ====== Start ======
+// ====== 开始生成 ======
 btnStart.addEventListener("click", async () => {
   if (imageRequests.length === 0) return;
   const tabId = await checkChatGPT();
-  if (!tabId) { alert("Please open and login to chatgpt.com first"); return; }
+  if (!tabId) { alert("请先在浏览器打开 https://chatgpt.com 并登录"); return; }
 
   const instruction = globalInstruction.value.trim();
-  if (!instruction) { alert("Please fill in the style prompt"); return; }
+  if (!instruction) { alert("请先填写提示词 / 风格要求"); return; }
 
-  // Reset progress
   imageRequests.forEach(r => { r._done = false; r._error = null; r._retries = 0; });
   updateProgress();
   renderTaskList();
 
   btnStart.disabled = true;
-  btnStart.textContent = "Running...";
+  btnStart.textContent = "⏳ 后台运行中...";
   btnParse.disabled = true;
 
   const useReview = enableReview.checked;
@@ -304,8 +456,8 @@ btnStart.addEventListener("click", async () => {
 
   const tasks = imageRequests.map((r) => ({
     id: `P${r.page}_${r.index}`,
-    prompt: `${instruction}\n\nSpecific request: ${r.description}`,
-    _originalRequirements: `${instruction}\n\nSpecific request: ${r.description}`,
+    prompt: `${instruction}\n\n具体需求：${r.description}`,
+    _originalRequirements: `${instruction}\n\n具体需求：${r.description}`,
     outputName: `P${r.page}_${r.index}_${r.description.replace(/[\\/:*?"<>|]/g, "_").slice(0, 40)}.png`,
     page: r.page,
     index: r.index,
@@ -321,19 +473,19 @@ btnStart.addEventListener("click", async () => {
   });
 
   if (!enqueueResp?.ok) {
-    alert(enqueueResp?.error || "Failed to enqueue");
+    alert(enqueueResp?.error || "入队失败");
     btnStart.disabled = false;
-    btnStart.textContent = "Start Auto Generate";
+    btnStart.textContent = "▶ 开始自动生成";
     btnParse.disabled = false;
     return;
   }
 
-  progressText.textContent = `${tasks.length} tasks queued${useReview ? " (review mode)" : ""}`;
+  progressText.textContent = `${tasks.length} 个任务已入队${useReview ? "（审核模式）" : ""}`;
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(pollProgress, 2000);
 });
 
-// ====== Progress polling ======
+// ====== 轮询进度 ======
 async function pollProgress() {
   try {
     const resp = await chrome.runtime.sendMessage({ type: "getProgress" });
@@ -345,8 +497,8 @@ async function pollProgress() {
 
     progressBar.style.width = pct + "%";
     progressText.textContent = running
-      ? `${done}/${total} (${completed} ok, ${errors} fail) - ${current?.id || ""}`
-      : `${done}/${total} (${completed} ok, ${errors} fail)`;
+      ? `⏳ ${done}/${total}（${completed}✅ ${errors}❌）- ${current?.id || ""}`
+      : `${done}/${total}（${completed}✅ ${errors}❌）`;
 
     if (current) {
       const idx = imageRequests.findIndex(r => r.page === current.page && r.index === current.index);
@@ -360,16 +512,16 @@ async function pollProgress() {
     if (!running && done >= total && total > 0) {
       clearInterval(pollTimer);
       pollTimer = null;
-      btnStart.textContent = "All Done";
+      btnStart.textContent = "✅ 全部完成";
       btnParse.disabled = false;
-      progressText.textContent = `Complete! ${completed} ok, ${errors} fail`;
-      setTimeout(() => { btnStart.disabled = false; btnStart.textContent = "Start Auto Generate"; }, 3000);
+      progressText.textContent = `完成！${completed}✅ ${errors}❌`;
+      setTimeout(() => { btnStart.disabled = false; btnStart.textContent = "▶ 开始自动生成"; }, 3000);
       updateTaskListFromStorage();
     }
   } catch {}
 }
 
-// ====== Final results ======
+// ====== 从 storage 读取最终结果 ======
 async function updateTaskListFromStorage() {
   const data = await chrome.storage.local.get("taskProgress");
   const results = data?.taskProgress?.taskResults || {};
@@ -377,17 +529,15 @@ async function updateTaskListFromStorage() {
     const taskId = `P${r.page}_${r.index}`;
     const result = results[taskId];
     if (result?.status === "error") {
-      const extra = result.score ? ` ${result.score}pts` : "";
-      markTaskError(i, (result.error || "Failed") + extra);
+      markTaskError(i, (result.error || "失败") + (result.score ? ` ${result.score}分` : ""));
     } else if (result?.status === "done") {
-      const scoreStr = result.score ? ` ${result.score}pts` : "";
-      const retryStr = result.retries > 0 ? ` R${result.retries}` : "";
-      markTaskDone(i, scoreStr + retryStr);
+      const info = (result.score ? `${result.score}分` : "") + (result.retries > 0 ? ` 重试${result.retries}次` : "");
+      markTaskDone(i, info);
     }
   });
 }
 
-// ====== Init ======
+// ====== 初始化 ======
 loadProjects();
 checkChatGPT();
 setInterval(checkChatGPT, 5000);

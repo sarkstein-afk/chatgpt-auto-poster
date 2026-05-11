@@ -53,12 +53,13 @@
 
   select { cursor:pointer; }
   input[type="checkbox"] { cursor:pointer; accent-color:#e94560; }
+  input[type="file"] { font-size:11px; }
 </style>
 </head>
 <body>
 
 <h2>
-  ChatGPT Auto Poster
+  🎨 ChatGPT 自动出图
   <span class="badge" id="modeBadge">v2</span>
 </h2>
 
@@ -69,66 +70,71 @@
     <select id="projectSelect" style="flex:1;">
       <option value="default">默认项目</option>
     </select>
-    <button class="btn-xs" id="btnNewProject" title="新建项目">+新</button>
+    <button class="btn-xs" id="btnNewProject" title="新建项目">+新建</button>
     <button class="btn-xs" id="btnDelProject" title="删除当前项目" style="color:#f44336;border-color:#f44336;">删除</button>
+  </div>
+  <div style="font-size:10px; color:#555; margin-top:4px;">
+    📁 素材放这里：projects/<span id="projectPath">default</span>/materials/
   </div>
 </div>
 
-<!-- PDF -->
+<!-- 文件选择 -->
 <div class="section">
-  <label>📄 PDF 文件（含【插图：xxx】标记）</label>
+  <label>📄 选择文件（PDF / PPT / PPTX）</label>
   <div class="row">
-    <input type="file" id="pdfFile" accept=".pdf" style="padding:4px;">
-    <button class="btn-sm" id="btnParse">解析</button>
+    <input type="file" id="pdfFile" accept=".pdf,.pptx,.docx,.xlsx,.txt,.csv,.md" style="padding:4px;">
+    <button class="btn-sm" id="btnParse">手动解析</button>
   </div>
   <div id="pdfStatus"></div>
-  <div style="font-size:10px; color:#555; margin-top:4px;">📁 Materials: projects/<span id="projectPath">default</span>/materials/</div>
 </div>
 
 <!-- 解析结果 -->
 <div class="section" id="resultSection" style="display:none;">
-  <label>插图标记</label>
+  <label>📋 找到的插图标记</label>
   <div class="task-list" id="taskList"></div>
   <div class="progress-bar"><div class="fill" id="progressBar" style="width:0%"></div></div>
   <div class="row" style="justify-content:space-between; margin-top:8px;">
-    <span style="font-size:11px; color:#aaa;" id="progressText">Ready</span>
-    <span style="font-size:11px; color:#aaa;" id="gptStatus">Not connected</span>
+    <span style="font-size:11px; color:#aaa;" id="progressText">就绪</span>
+    <span style="font-size:11px; color:#aaa;" id="gptStatus">未连接</span>
   </div>
 </div>
 
 <!-- 审核设置 -->
 <div class="section">
-  <label>AI Review (GPT-4V scores each image)</label>
+  <label>🔍 AI 审核（GPT-4V 打分，百分制）</label>
   <div class="row" style="align-items:center; margin-bottom:8px;">
     <input type="checkbox" id="enableReview" checked style="width:auto; margin-right:4px;">
-    <span style="font-size:12px;">Enable</span>
-    <span style="font-size:11px; color:#aaa;">Pass >=</span>
+    <span style="font-size:12px;">启用审核</span>
+    <span style="font-size:11px; color:#aaa;">通过 ≥</span>
     <input type="number" id="passScore" value="80" min="50" max="100" step="5" style="width:50px; text-align:center;">
-    <span style="font-size:11px; color:#aaa;">pts</span>
-    <span style="font-size:11px; color:#aaa; margin-left:4px;">Max retries</span>
+    <span style="font-size:11px; color:#aaa;">分</span>
+    <span style="font-size:11px; color:#aaa; margin-left:6px;">最多重试</span>
     <input type="number" id="maxRetries" value="2" min="0" max="5" style="width:50px; text-align:center;">
+    <span style="font-size:11px; color:#aaa;">次</span>
   </div>
-  <textarea id="reviewPromptTemplate" placeholder="Custom review criteria (optional)&#10;Leave blank to use default template" style="height:40px; font-size:11px;"></textarea>
+  <textarea id="reviewPromptTemplate" placeholder="自定义审核标准（可选）&#10;留空则使用默认审核模板" style="height:40px; font-size:11px;"></textarea>
 </div>
 
 <!-- 风格设置 -->
 <div class="section">
-  <label>Prompt / Style requirements</label>
-  <textarea id="globalInstruction" placeholder="e.g. Professional style, blue-gold color scheme, vertical poster layout..."></textarea>
+  <label>🎯 提示词 / 统一风格要求</label>
+  <textarea id="globalInstruction" placeholder="例如：专业大气风格，蓝金色调，竖版构图，适合课程海报……"></textarea>
 </div>
 
-<!-- 操作 -->
-<button class="btn-primary" id="btnStart" disabled>Start Auto Generate</button>
+<!-- 操作按钮 -->
+<button class="btn-primary" id="btnStart" disabled>▶ 开始自动生成</button>
+
 <p class="help">
-  <strong>Usage:</strong><br>
-  1. Create a project, write style prompt<br>
-  2. Select PDF with <code>[illustration: description]</code> markers<br>
-  3. Click <code>Parse</code> to extract markers<br>
-  4. Keep chatgpt.com logged in<br>
-  5. Click <code>Start</code> - images download to <code>chatgpt-posters/</code><br>
-  <br>PDF marker format: <code>[illustration: your image description]</code>
+  <strong>使用步骤：</strong><br>
+  1. 新建项目，写好风格提示词<br>
+  2. 在 PDF 或 PPT 中用 <code>【插图：描述内容】</code> 标记需要配图的位置<br>
+  3. 选择文件 → 自动解析 → 显示找到的插图标记<br>
+  4. 确保 chatgpt.com 已登录并打开<br>
+  5. 点击 <code>开始自动生成</code> → 等待自动下载<br>
+  <br>支持格式：<code>【插图：xxx】</code> / <code>[illustration: xxx]</code>
 </p>
 
+<script src="lib/jszip.min.js"></script>
 <script src="popup.js"></script>
 </body>
 </html>
