@@ -229,6 +229,47 @@ async function waitForImage(timeout = 180000) {
   return false;
 }
 
+// 等 GPT 彻底停止输出（stop 按钮消失 + 流式输出结束）
+async function waitForResponseComplete(timeout) {
+  timeout = timeout || 60000;
+  var start = Date.now();
+
+  while (Date.now() - start < timeout) {
+    // Stop 按钮还在 → 还在生成
+    if (document.querySelector('[data-testid="stop-button"]')) {
+      await sleep(2000);
+      continue;
+    }
+
+    // 检查是否有流式输出指示器（正在"打字"）
+    var streaming = document.querySelector('[class*="streaming"], [class*="result-streaming"], [class*="loading"], .animate-pulse');
+    if (streaming && streaming.offsetParent !== null) {
+      await sleep(1500);
+      continue;
+    }
+
+    // 检查 conversation turns 的文本是否还在变化
+    var turns = Array.from(document.querySelectorAll('[data-testid^="conversation-turn-"]'));
+    if (turns.length > 0) {
+      var lastTurn = turns[turns.length - 1];
+      var text = (lastTurn.innerText || "").trim();
+      // 等 2 秒再检查一次，看文本是否稳定
+      await sleep(2000);
+      var text2 = (lastTurn.innerText || "").trim();
+      if (text === text2 && text.length > 0) {
+        // 文本稳定了
+        return true;
+      }
+      // 文本还在变，继续等
+      continue;
+    }
+
+    // 没有 conversation turns（可能还在加载），等一下
+    await sleep(2000);
+  }
+  return true; // 超时不阻塞
+}
+
 async function waitForTextResponse(timeout = 120000) {
   // 等 GPT-4V 文字回复（不是生图）
   const start = Date.now();
@@ -363,6 +404,8 @@ async function doGenerate(prompt, outputName) {
     var ok = await waitForImage();
     if (!ok) console.log("  Timeout, trying fallback");
 
+    // 等 GPT 彻底停下（不再流式输出、不再有 stop 按钮）
+    await waitForResponseComplete();
     await sleep(jitter(2000, 0.5));
 
     // Find image URL
