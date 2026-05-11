@@ -9,7 +9,10 @@ const pdfjsReady = (async function init() {
 const projectSelect = document.getElementById("projectSelect");
 const btnNewProject = document.getElementById("btnNewProject");
 const btnDelProject = document.getElementById("btnDelProject");
-const projectPathEl = document.getElementById("projectPath");
+const btnSelectRoot = document.getElementById("btnSelectRoot");
+const btnScanProjects = document.getElementById("btnScanProjects");
+const rootPathEl = document.getElementById("rootPath");
+const projectPathHint = document.getElementById("projectPathHint");
 const pdfFileInput = document.getElementById("pdfFile");
 const btnParse = document.getElementById("btnParse");
 const btnStart = document.getElementById("btnStart");
@@ -42,11 +45,19 @@ const DEFAULT_PROJECT = {
 
 // ====== 项目管理 ======
 async function loadProjects() {
-  const data = await chrome.storage.local.get(["projects", "activeProject"]);
+  const data = await chrome.storage.local.get(["projects", "activeProject", "projectRootPath"]);
   projects = data.projects || { default: { ...DEFAULT_PROJECT } };
   if (!projects["default"]) projects["default"] = { ...DEFAULT_PROJECT };
   activeProject = data.activeProject || "default";
   if (!projects[activeProject]) activeProject = "default";
+
+  // 恢复文件夹路径
+  if (data.projectRootPath) {
+    rootPathEl.textContent = data.projectRootPath;
+    btnScanProjects.style.display = "";
+    projectPathHint.textContent = `📁 ${data.projectRootPath}\\${activeProject}\\materials\\`;
+  }
+
   renderProjectList();
   loadActiveProject();
 }
@@ -64,8 +75,63 @@ function loadActiveProject() {
   passScore.value = p.passScore || 80;
   maxRetries.value = p.maxRetries || 2;
   reviewPromptTemplate.value = p.reviewPromptTemplate || "";
-  if (projectPathEl) projectPathEl.textContent = activeProject;
+  updateProjectPathHint();
 }
+
+function updateProjectPathHint() {
+  const rootPath = rootPathEl.textContent;
+  if (rootPath && rootPath !== "未选择") {
+    projectPathHint.textContent = `📁 ${rootPath}\\${activeProject}\\materials\\`;
+  }
+}
+
+// ====== 文件夹选择（对接本地文件系统） ======
+btnSelectRoot.addEventListener("click", async () => {
+  try {
+    const dirHandle = await window.showDirectoryPicker({ mode: "read" });
+    const rootPath = dirHandle.name; // 只拿到文件夹名，拿不到完整路径
+
+    // 扫描子目录
+    const discoveredProjects = { default: { ...DEFAULT_PROJECT } };
+    for await (const [name, handle] of dirHandle.entries()) {
+      if (handle.kind === "directory" && name !== "default") {
+        discoveredProjects[name] = {
+          name: name,
+          globalInstruction: "",
+          enableReview: true,
+          passScore: 80,
+          maxRetries: 2,
+          reviewPromptTemplate: "",
+        };
+      }
+    }
+
+    // 合并到现有项目（不覆盖已有设置）
+    for (const [id, cfg] of Object.entries(discoveredProjects)) {
+      if (!projects[id]) projects[id] = cfg;
+    }
+
+    // 保存
+    const displayPath = `projects 文件夹（${Object.keys(discoveredProjects).length - 1} 个子项目）`;
+    await chrome.storage.local.set({ projects, projectRootPath: displayPath });
+
+    rootPathEl.textContent = displayPath;
+    btnScanProjects.style.display = "";
+    projectPathHint.textContent = `📁 projects\\${activeProject}\\materials\\`;
+    renderProjectList();
+
+    pdfStatusEl.innerHTML = `<span class='status status-ok'>✅ 已对接，发现 ${Object.keys(discoveredProjects).length - 1} 个项目文件夹</span>`;
+  } catch (e) {
+    if (e.name !== "AbortError") {
+      pdfStatusEl.innerHTML = `<span class='status status-err'>❌ ${e.message}</span>`;
+    }
+  }
+});
+
+// 重新扫描
+btnScanProjects.addEventListener("click", async () => {
+  btnSelectRoot.click();
+});
 
 function saveActiveProject() {
   projects[activeProject] = {
@@ -86,6 +152,7 @@ projectSelect.addEventListener("change", () => {
   activeProject = projectSelect.value;
   loadActiveProject();
   chrome.storage.local.set({ activeProject });
+  updateProjectPathHint();
   imageRequests = [];
   resultSection.style.display = "none";
   btnStart.disabled = true;
@@ -194,15 +261,17 @@ async function parsePDF(file) {
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
   const markers = [];
+  const pageTexts = [];
 
   for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
     const page = await pdf.getPage(pageNum);
     const textContent = await page.getTextContent();
     const pageText = textContent.items.map(item => item.str).join("");
     markers.push(...extractMarkers(pageText, pageNum));
+    pageTexts.push({ page: pageNum, text: pageText.slice(0, 300) });
   }
 
-  return { markers, extra: `${pdf.numPages} 页` };
+  return { markers, extra: `${pdf.numPages} 页`, pageTexts };
 }
 
 // ====== PPTX 解析 ======
@@ -221,10 +290,10 @@ async function parsePPTX(file) {
     });
 
   let slideNum = 0;
+  const pageTexts = [];
   for (const slidePath of slideFiles) {
     slideNum++;
     const xmlText = await zip.files[slidePath].async("string");
-    // 提取所有 <a:t> 标签中的文本
     const texts = [];
     const regex = /<a:t[^>]*>([^<]*)<\/a:t>/g;
     let match;
@@ -233,9 +302,10 @@ async function parsePPTX(file) {
     }
     const slideText = texts.join("");
     markers.push(...extractMarkers(slideText, slideNum));
+    pageTexts.push({ page: slideNum, text: slideText.slice(0, 300) });
   }
 
-  return { markers, extra: `${slideNum} 张幻灯片` };
+  return { markers, extra: `${slideNum} 张幻灯片`, pageTexts };
 }
 
 // ====== DOCX 解析 ======
@@ -251,7 +321,8 @@ async function parseDOCX(file) {
   }
   const fullText = texts.join("");
   const markers = extractMarkers(fullText, 1);
-  return { markers, extra: `${texts.length} 个文本片段` };
+  const pageTexts = [{ page: 1, text: fullText.slice(0, 500) }];
+  return { markers, extra: `1 个文档`, pageTexts };
 }
 
 // ====== XLSX 解析 ======
@@ -303,14 +374,16 @@ async function parseXLSX(file) {
 
   const fullText = allTexts.join(" ");
   const markers = extractMarkers(fullText, 1);
-  return { markers, extra: `${sheetFiles.length} 个工作表` };
+  const pageTexts = [{ page: 1, text: fullText.slice(0, 500) }];
+  return { markers, extra: `${sheetFiles.length} 个工作表`, pageTexts };
 }
 
 // ====== TXT 解析 ======
 async function parseTXT(file) {
   const text = await file.text();
   const markers = extractMarkers(text, 1);
-  return { markers, extra: `${text.length} 字符` };
+  const pageTexts = [{ page: 1, text: text.slice(0, 500) }];
+  return { markers, extra: `${text.length} 字符`, pageTexts };
 }
 
 // ====== 统一解析入口 ======
@@ -352,23 +425,32 @@ async function parseFile() {
       return;
     }
 
-    const { markers, extra } = result;
+    const { markers, extra, pageTexts } = result;
 
     if (markers.length === 0) {
-      pdfStatusEl.innerHTML = `<span class='status status-warn'>⚠ 未找到【插图：xxx】标记（${extra}）</span>`;
-      resultSection.style.display = "none";
-      btnStart.disabled = true;
-      return;
+      // 无标记 → 自动整页生成
+      if (!pageTexts || pageTexts.length === 0) {
+        pdfStatusEl.innerHTML = `<span class='status status-warn'>⚠ 未找到任何内容（${extra}）</span>`;
+        resultSection.style.display = "none";
+        btnStart.disabled = true;
+        return;
+      }
+      imageRequests = pageTexts.map((pt, i) => ({
+        index: i + 1,
+        page: pt.page,
+        description: `根据这一页的内容生成配图。页面文字：${pt.text || "（无文字内容，请根据上下文生成合适的插图）"}`,
+        _autoGenerated: true,
+      }));
+      pdfStatusEl.innerHTML = `<span class='status status-ok'>✅ 自动整页模式：${extra}，每页/每张幻灯片生成 1 张图（共 ${imageRequests.length} 张）</span>`;
+    } else {
+      // 有标记 → 用标记
+      imageRequests = markers.map((m, i) => ({
+        index: i + 1,
+        page: m.page,
+        description: m.description,
+      }));
+      pdfStatusEl.innerHTML = `<span class='status status-ok'>✅ 标记模式：${extra}，找到 ${imageRequests.length} 个【插图：xxx】标记</span>`;
     }
-
-    // 分配全局序号
-    imageRequests = markers.map((m, i) => ({
-      index: i + 1,
-      page: m.page,
-      description: m.description,
-    }));
-
-    pdfStatusEl.innerHTML = `<span class='status status-ok'>✅ 解析完成：${extra}，找到 ${imageRequests.length} 个插图标记</span>`;
     resultSection.style.display = "block";
     btnStart.disabled = false;
     renderTaskList();
@@ -456,7 +538,7 @@ btnStart.addEventListener("click", async () => {
 
   const tasks = imageRequests.map((r) => ({
     id: `P${r.page}_${r.index}`,
-    prompt: `${instruction}\n\n具体需求：${r.description}`,
+    prompt: `${instruction}\n\n具体需求：${r.description}\n\n重要规则：画面中的文字必须清晰可读，不能出现乱码、扭曲、拼写错误或无法辨认的字符。`,
     _originalRequirements: `${instruction}\n\n具体需求：${r.description}`,
     outputName: `P${r.page}_${r.index}_${r.description.replace(/[\\/:*?"<>|]/g, "_").slice(0, 40)}.png`,
     page: r.page,

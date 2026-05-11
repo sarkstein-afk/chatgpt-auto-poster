@@ -66,6 +66,11 @@
 <!-- 项目选择 -->
 <div class="section">
   <label>📁 项目</label>
+  <div class="row" style="margin-bottom:6px;">
+    <button class="btn-sm" id="btnSelectRoot" title="选择本地 projects 文件夹" style="font-size:10px;padding:4px 8px;white-space:nowrap;">📁 选择项目目录</button>
+    <span style="font-size:10px;color:#888;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" id="rootPath">未选择</span>
+    <button class="btn-xs" id="btnScanProjects" title="扫描子文件夹" style="display:none;">🔄 扫描</button>
+  </div>
   <div class="row">
     <select id="projectSelect" style="flex:1;">
       <option value="default">默认项目</option>
@@ -73,8 +78,8 @@
     <button class="btn-xs" id="btnNewProject" title="新建项目">+新建</button>
     <button class="btn-xs" id="btnDelProject" title="删除当前项目" style="color:#f44336;border-color:#f44336;">删除</button>
   </div>
-  <div style="font-size:10px; color:#555; margin-top:4px;">
-    📁 素材放这里：projects/<span id="projectPath">default</span>/materials/
+  <div style="font-size:10px; color:#555; margin-top:4px;" id="projectPathHint">
+    💡 点击「选择项目目录」对接本地文件夹
   </div>
 </div>
 
