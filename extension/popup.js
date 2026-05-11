@@ -70,7 +70,13 @@ async function loadProjects() {
   if (data.projectRootPath) {
     rootPathEl.textContent = data.projectRootPath;
     btnScanProjects.style.display = "";
-    projectPathHint.textContent = `📁 ${data.projectRootPath}\\${activeProject}\\materials\\`;
+  }
+
+  // 如果只有默认项目，提示用户对接文件夹
+  if (Object.keys(projects).length <= 1) {
+    projectPathHint.textContent = "💡 点「选择项目目录」对接本地 projects 文件夹";
+  } else {
+    updateProjectPathHint();
   }
 
   renderProjectList();
@@ -354,10 +360,13 @@ scrapeUrlInput.addEventListener("keydown", function(e) {
 
 btnScrapeAll.addEventListener("click", async function() {
   if (!savedUrls.length) {
-    // 没链接就抓当前页面
+    // 没链接就抓当前活动页面
     try {
       var tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tabs.length || tabs[0].url.startsWith("chrome")) { scrapeStatus.textContent = "请先打开一个网页"; return; }
+      if (!tabs.length || (tabs[0].url && tabs[0].url.startsWith("chrome"))) {
+        scrapeStatus.textContent = "请先打开一个网页或添加链接";
+        return;
+      }
       savedUrls.push(tabs[0].url);
       renderUrlTags();
     } catch(e) {}
@@ -371,38 +380,39 @@ btnScrapeAll.addEventListener("click", async function() {
     var url = savedUrls[i];
     scrapeStatus.textContent = "⏳ 抓取中 (" + (i + 1) + "/" + savedUrls.length + ")...";
     try {
-      var response = await fetch(url);
-      var html = await response.text();
+      // 打开隐藏标签页，等页面渲染完成后再抓 DOM
+      var tab = await chrome.tabs.create({ url: url, active: false });
+      await new Promise(function(resolve) {
+        var timeout = setTimeout(function() { resolve(); }, 15000);
+        chrome.tabs.onUpdated.addListener(function listener(tid, info) {
+          if (tid === tab.id && info.status === "complete") {
+            clearTimeout(timeout);
+            chrome.tabs.onUpdated.removeListener(listener);
+            setTimeout(resolve, 2000); // 额外等 2 秒 JS 渲染
+          }
+        });
+      });
 
-      // 简易HTML解析
-      var titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
-      var title = titleMatch ? titleMatch[1].trim() : url;
+      // 在渲染好的页面里执行 DOM 抓取
+      var results = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: function() {
+          var title = document.title || "";
+          var bodyText = (document.body ? document.body.innerText : "").replace(/\s{3,}/g, "\n").slice(0, 3000);
+          var imgs = Array.from(document.querySelectorAll("img"))
+            .filter(function(img) { return img.naturalWidth > 150 && img.src.startsWith("http"); })
+            .map(function(img) { return img.src; })
+            .slice(0, 30);
+          return { title: title, text: bodyText, images: imgs, url: location.href };
+        },
+      });
 
-      // 提取body文本
-      var bodyText = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-        .replace(/<[^>]+>/g, " ")
-        .replace(/&nbsp;/g, " ")
-        .replace(/&amp;/g, "&")
-        .replace(/&lt;/g, "<")
-        .replace(/&gt;/g, ">")
-        .replace(/&quot;/g, '"')
-        .replace(/\s{3,}/g, "\n")
-        .trim()
-        .slice(0, 3000);
+      // 关闭标签页
+      chrome.tabs.remove(tab.id);
 
-      // 提取图片URL
-      var imgMatches = html.match(/<img[^>]+src=["']([^"']+)["'][^>]*>/gi) || [];
-      var imgUrls = imgMatches.map(function(m) {
-        var sm = m.match(/src=["']([^"']+)["']/i);
-        var src = sm ? sm[1] : "";
-        if (src.startsWith("//")) src = "https:" + src;
-        if (src.startsWith("/")) src = new URL(src, url).href;
-        return src;
-      }).filter(function(u) { return u.startsWith("http"); }).slice(0, 20);
-
-      scrapedText += "\n\n【来源 " + (i + 1) + "：" + title + "】\n" + bodyText;
-      scrapedImages = scrapedImages.concat(imgUrls);
+      var data = results[0].result;
+      scrapedText += "\n\n【来源 " + (i + 1) + "：" + data.title + "】\n" + data.text;
+      scrapedImages = scrapedImages.concat(data.images);
     } catch(e) {
       scrapedText += "\n\n【来源 " + (i + 1) + "：抓取失败 - " + e.message + "】";
     }
