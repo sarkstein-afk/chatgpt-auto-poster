@@ -113,6 +113,18 @@
   </div>
 </div>
 
+<!-- 网页抓取 -->
+<div class="section">
+  <label>🌐 网页素材（输入链接，自动抓取图文作为参考）</label>
+  <div class="row" style="margin-bottom:4px;">
+    <input type="text" id="scrapeUrlInput" placeholder="粘贴网页链接..." style="flex:1;font-size:11px;">
+    <button class="btn-xs" id="btnAddUrl">+添加</button>
+    <button class="btn-xs" id="btnScrapeAll" style="color:#4caf50;border-color:#4caf50;">抓取全部</button>
+  </div>
+  <div id="urlTags" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px;"></div>
+  <div style="font-size:10px;" id="scrapeStatus"></div>
+</div>
+
 <!-- 审核设置 -->
 <div class="section">
   <label>🔍 AI 审核（GPT-4V 打分，百分制）</label>

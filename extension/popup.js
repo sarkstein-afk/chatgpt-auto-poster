@@ -32,6 +32,16 @@ const isTemplate = document.getElementById("isTemplate");
 const fileRoleHint = document.getElementById("fileRoleHint");
 const refImagesEl = document.getElementById("refImages");
 const refStatusEl = document.getElementById("refStatus");
+const btnAddUrl = document.getElementById("btnAddUrl");
+const btnScrapeAll = document.getElementById("btnScrapeAll");
+const scrapeUrlInput = document.getElementById("scrapeUrlInput");
+const urlTags = document.getElementById("urlTags");
+const scrapeStatus = document.getElementById("scrapeStatus");
+
+// ====== State ======
+let savedUrls = []; // 用户添加的网页链接
+let scrapedText = "";
+let scrapedImages = [];
 
 // ====== State ======
 let imageRequests = [];
@@ -310,6 +320,98 @@ btnDelProject.addEventListener("click", () => {
 [globalInstruction, enableReview, maxRetries, passScore, reviewPromptTemplate].forEach(el =>
   el.addEventListener("change", saveActiveProject)
 );
+
+// ====== 网页抓取 ======
+function renderUrlTags() {
+  urlTags.innerHTML = savedUrls.map(function(u, i) {
+    return '<span style="background:#0f3460;color:#eee;padding:2px 6px;border-radius:3px;font-size:10px;display:inline-flex;align-items:center;gap:4px;">' +
+      u.slice(0, 50) + (u.length > 50 ? "..." : "") +
+      '<span data-idx="' + i + '" style="cursor:pointer;color:#f44336;">✕</span></span>';
+  }).join("");
+  // 删除按钮
+  urlTags.querySelectorAll("span[data-idx]").forEach(function(el) {
+    el.addEventListener("click", function() {
+      savedUrls.splice(parseInt(this.dataset.idx), 1);
+      renderUrlTags();
+      scrapeStatus.textContent = savedUrls.length ? savedUrls.length + "个链接待抓取" : "";
+    });
+  });
+}
+
+btnAddUrl.addEventListener("click", function() {
+  var url = scrapeUrlInput.value.trim();
+  if (!url) return;
+  if (!url.startsWith("http")) url = "https://" + url;
+  if (savedUrls.indexOf(url) === -1) {
+    savedUrls.push(url);
+    renderUrlTags();
+    scrapeStatus.textContent = savedUrls.length + "个链接待抓取";
+  }
+  scrapeUrlInput.value = "";
+});
+
+scrapeUrlInput.addEventListener("keydown", function(e) {
+  if (e.key === "Enter") { btnAddUrl.click(); }
+});
+
+btnScrapeAll.addEventListener("click", async function() {
+  if (!savedUrls.length) {
+    // 没链接就抓当前页面
+    try {
+      var tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tabs.length || tabs[0].url.startsWith("chrome")) { scrapeStatus.textContent = "请先打开一个网页"; return; }
+      savedUrls.push(tabs[0].url);
+      renderUrlTags();
+    } catch(e) {}
+  }
+
+  scrapeStatus.textContent = "⏳ 抓取中 (0/" + savedUrls.length + ")...";
+  scrapedText = "";
+  scrapedImages = [];
+
+  for (var i = 0; i < savedUrls.length; i++) {
+    var url = savedUrls[i];
+    scrapeStatus.textContent = "⏳ 抓取中 (" + (i + 1) + "/" + savedUrls.length + ")...";
+    try {
+      var response = await fetch(url);
+      var html = await response.text();
+
+      // 简易HTML解析
+      var titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+      var title = titleMatch ? titleMatch[1].trim() : url;
+
+      // 提取body文本
+      var bodyText = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/&nbsp;/g, " ")
+        .replace(/&amp;/g, "&")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&quot;/g, '"')
+        .replace(/\s{3,}/g, "\n")
+        .trim()
+        .slice(0, 3000);
+
+      // 提取图片URL
+      var imgMatches = html.match(/<img[^>]+src=["']([^"']+)["'][^>]*>/gi) || [];
+      var imgUrls = imgMatches.map(function(m) {
+        var sm = m.match(/src=["']([^"']+)["']/i);
+        var src = sm ? sm[1] : "";
+        if (src.startsWith("//")) src = "https:" + src;
+        if (src.startsWith("/")) src = new URL(src, url).href;
+        return src;
+      }).filter(function(u) { return u.startsWith("http"); }).slice(0, 20);
+
+      scrapedText += "\n\n【来源 " + (i + 1) + "：" + title + "】\n" + bodyText;
+      scrapedImages = scrapedImages.concat(imgUrls);
+    } catch(e) {
+      scrapedText += "\n\n【来源 " + (i + 1) + "：抓取失败 - " + e.message + "】";
+    }
+  }
+
+  scrapeStatus.textContent = "✅ 抓完 " + savedUrls.length + "个链接 (" + scrapedImages.length + "张图)";
+});
 
 // ====== 参考图读取 ======
 refImagesEl.addEventListener("change", async () => {
@@ -687,11 +789,17 @@ btnStart.addEventListener("click", async () => {
   const threshold = parseInt(passScore.value) || 80;
   const reviewTmpl = reviewPromptTemplate.value.trim();
 
+  // Append scraped content to prompt if available
+  var scrapedPrompt = "";
+  if (scrapedText) {
+    scrapedPrompt = "\n\n【网页参考素材】\n" + scrapedText.slice(0, 2000);
+  }
+
   // Build tasks: one per marker/page, each independent
   var tasks = imageRequests.map(function(r) {
     return {
       id: "P" + r.page + "_" + r.index,
-      prompt: instruction + "\n\n具体要求：" + r.description + "\n\n重要规则：画面中的文字必须清晰可读，不能出现乱码、扭曲、拼写错误或无法辨认的字符。",
+      prompt: instruction + "\n\n具体要求：" + r.description + scrapedPrompt + "\n\n重要规则：画面中的文字必须清晰可读，不能出现乱码、扭曲、拼写错误或无法辨认的字符。",
       _originalRequirements: instruction + "\n\n具体要求：" + r.description,
       outputName: "P" + r.page + "_" + r.index + "_" + r.description.replace(/[\\/:*?"<>|]/g, "_").slice(0, 40) + ".png",
       page: r.page,
